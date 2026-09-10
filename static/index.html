@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lakera Red Runner</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#151a21; --panel2:#1b222b; --line:#262e39;
+    --fg:#e6edf3; --dim:#8b98a5; --accent:#e5484d; --ok:#3fb950; --warn:#d29922;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex;
+           align-items:baseline; gap:12px; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.02em; }
+  header span { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns:minmax(380px,460px) 1fr; gap:0; height:calc(100vh - 57px); }
+  #form { overflow-y:auto; padding:20px 24px 60px; border-right:1px solid var(--line); }
+  #run { overflow:hidden; display:flex; flex-direction:column; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px 16px 16px;
+             background:var(--panel); }
+  legend { padding:0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; }
+  label.inline { display:flex; align-items:center; gap:8px; margin:10px 0 0; color:var(--fg); font-size:13px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width:100%; background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+    color:var(--fg); padding:7px 9px; font:inherit; font-size:13px; }
+  textarea { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; resize:vertical; }
+  input:focus, select:focus, textarea:focus { outline:1px solid var(--accent); border-color:var(--accent); }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:9px 14px;
+           font:inherit; font-weight:600; cursor:pointer; }
+  button.ghost { background:var(--panel2); color:var(--fg); border:1px solid var(--line); font-weight:500; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .objectives { max-height:190px; overflow-y:auto; border:1px solid var(--line); border-radius:6px;
+                background:var(--panel2); padding:8px 10px; }
+  .objectives h4 { margin:8px 0 4px; font-size:11px; color:var(--dim); text-transform:uppercase;
+                   letter-spacing:.06em; }
+  .objectives label { display:flex; gap:8px; align-items:flex-start; color:var(--fg); margin:3px 0;
+                      font-size:12px; cursor:pointer; }
+  .objectives input { margin-top:3px; }
+  .hint { font-size:11px; color:var(--dim); margin-top:4px; }
+  #ca-out { margin-top:10px; font-size:12px; font-family:ui-monospace,Menlo,monospace;
+            white-space:pre-wrap; word-break:break-word; padding:8px 10px; border-radius:6px;
+            background:var(--panel2); border:1px solid var(--line); display:none; }
+  input[type=file] { width:100%; font-size:12px; color:var(--dim); }
+  #probe-out { margin-top:10px; font-size:12px; font-family:ui-monospace,Menlo,monospace;
+               white-space:pre-wrap; word-break:break-word; padding:8px 10px; border-radius:6px;
+               background:var(--panel2); border:1px solid var(--line); display:none; }
+  #runbar { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:14px;
+            align-items:center; flex-wrap:wrap; }
+  #status { font-weight:600; }
+  #log { flex:1; overflow-y:auto; padding:10px 20px; font-family:ui-monospace,Menlo,monospace;
+         font-size:12px; }
+  .l { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #1b1f26; }
+  .l .lv { flex:0 0 62px; color:var(--dim); text-transform:uppercase; font-size:10px; padding-top:2px; }
+  .l .msg { white-space:pre-wrap; word-break:break-word; flex:1; }
+  .l.attack .lv { color:var(--accent); } .l.attack .msg { color:#ffb3b5; }
+  .l.reply .lv { color:var(--ok); } .l.reply .msg { color:#9fe0ac; }
+  .l.error .lv, .l.error .msg { color:var(--accent); }
+  .l.warn .lv { color:var(--warn); }
+  .l .fields { color:var(--dim); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px; font-weight:600; }
+  .pill.fail { background:#3d1418; color:#ff9a9d; }
+  .pill.pass { background:#122a17; color:#8fe0a3; }
+  .pill.err { background:#3a2c10; color:#e9c46a; }
+  #results { padding:0 20px 24px; overflow-y:auto; max-height:45%; border-top:1px solid var(--line); }
+  #results:empty { display:none; }
+  a { color:#7cc0ff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lakera Red Runner</h1>
+  <span>http · https · ws · wss &nbsp;|&nbsp; none · bearer · basic · api key</span>
+</header>
+<main>
+<form id="form" autocomplete="off">
+
+  <fieldset>
+    <legend>Red API</legend>
+    <label>Red Team API key</label>
+    <input type="password" id="api_key" placeholder="from LAKERA_RED_API_KEY if blank">
+    <div class="hint" id="keyhint"></div>
+    <label>Base URL</label>
+    <input type="text" id="base_url">
+  </fieldset>
+
+  <fieldset>
+    <legend>Target endpoint</legend>
+    <label>URL (http / https / ws / wss)</label>
+    <input type="text" id="url" value="http://localhost:8000/chat">
+
+    <label>Authentication</label>
+    <select id="auth_type">
+      <option value="none">None</option>
+      <option value="bearer">Bearer token</option>
+      <option value="basic">Basic auth</option>
+      <option value="api_key">API key header</option>
+    </select>
+
+    <div id="auth_bearer" hidden>
+      <label>Token</label><input type="password" id="token_bearer">
+    </div>
+    <div id="auth_basic" hidden>
+      <div class="row">
+        <div><label>Username</label><input type="text" id="username"></div>
+        <div><label>Password</label><input type="password" id="password"></div>
+      </div>
+    </div>
+    <div id="auth_apikey" hidden>
+      <div class="row">
+        <div><label>Header name</label><input type="text" id="api_key_header" value="X-API-Key"></div>
+        <div><label>Key</label><input type="password" id="token_apikey"></div>
+      </div>
+    </div>
+
+    <label class="inline"><input type="checkbox" id="verify_tls"> Verify TLS certificate</label>
+    <div class="hint">Off by default so self-signed and MITM-proxied endpoints just work.</div>
+    <label>CA bundle</label>
+    <select id="ca_mode">
+      <option value="none">Default trust store</option>
+      <option value="path">Path on the server (file or directory)</option>
+      <option value="upload">Upload a certificate</option>
+    </select>
+    <div class="hint">Trusts <em>this</em> root instead of the public ones, and turns verification
+      on. Use <strong>Diagnose TLS</strong> to find out which root to supply.</div>
+
+    <div id="ca_path_box" hidden>
+      <label>File or directory path</label>
+      <div class="row">
+        <input type="text" id="ca_bundle" placeholder="/etc/ssl/certs/corp-root-ca.pem or /etc/ssl/certs">
+        <button type="button" class="ghost" id="ca_inspect" style="flex:0 0 auto">Inspect</button>
+      </div>
+      <div class="hint">A directory is read directly, so it does <em>not</em> need
+        <code>c_rehash</code>ing.</div>
+    </div>
+
+    <div id="ca_upload_box" hidden>
+      <label>Stored bundles</label>
+      <div class="row">
+        <select id="ca_saved"></select>
+        <button type="button" class="ghost" id="ca_delete" style="flex:0 0 auto">Delete</button>
+      </div>
+      <label>Add one — pick a .pem / .crt / .cer / .der file</label>
+      <input type="file" id="ca_file" accept=".pem,.crt,.cer,.der,.cert,.ca-bundle">
+      <label>…or paste PEM text</label>
+      <textarea id="ca_paste" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button type="button" class="ghost" id="ca_upload">Upload</button>
+      </div>
+    </div>
+    <div id="ca-out"></div>
+
+    <div id="http_only">
+      <label>HTTP method</label>
+      <select id="method"><option>POST</option><option>PUT</option><option>PATCH</option><option>GET</option></select>
+    </div>
+    <label>Request body template</label>
+    <textarea id="body_template" rows="3" placeholder='{"message": "{{prompt}}"}'></textarea>
+    <div class="hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
+      [{role,content}] history (use it for multi-turn crescendo scans).</div>
+    <label>Response path</label>
+    <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
+    <label>Extra headers (JSON)</label>
+    <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
+
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="ghost" id="probe">Test connection</button>
+      <button type="button" class="ghost" id="tlsdoc">Diagnose TLS</button>
+    </div>
+    <div id="probe-out"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Target profile</legend>
+    <label>Target name</label>
+    <input type="text" id="target_name" value="my-agent">
+    <label>…or reuse an existing target by id</label>
+    <input type="text" id="target_id" placeholder="target_abc123 — overrides name">
+    <label>App description</label>
+    <textarea id="app_description" rows="2"
+      placeholder="Blank + no target id = Red runs recon through your endpoint"></textarea>
+    <div class="row">
+      <div><label>Allowed actions (one per line)</label><textarea id="allowed_actions" rows="3"></textarea></div>
+      <div><label>Forbidden actions (one per line)</label><textarea id="forbidden_actions" rows="3"></textarea></div>
+    </div>
+    <label>Ground truth — system prompt</label>
+    <textarea id="system_prompt" rows="2"></textarea>
+    <label>Ground truth — tool definitions (one per line)</label>
+    <textarea id="tools" rows="2"></textarea>
+    <label class="inline"><input type="checkbox" id="refresh_recon"> Re-run recon before scanning</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Scan</legend>
+    <label>Scan name</label>
+    <input type="text" id="scan_name" value="web-service scan">
+    <div class="row">
+      <div><label>Strategy</label>
+        <select id="strategy">
+          <option value="static">static — fixed probes</option>
+          <option value="crescendo">crescendo — multi-turn escalation</option>
+          <option value="smoke">smoke — canned sanity check</option>
+        </select>
+      </div>
+      <div><label>Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
+    </div>
+    <div id="p_static" class="row">
+      <div><label>Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
+    </div>
+    <div id="p_crescendo" class="row" hidden>
+      <div><label>Max turns</label><input type="number" id="max_turns" value="10" min="1" max="30"></div>
+      <div><label>Max retries</label><input type="number" id="max_retries" value="3" min="0" max="10"></div>
+      <div><label>Early stop</label><input type="number" id="early_stop_score" value="4" min="3" max="5"></div>
+    </div>
+    <div id="p_smoke" hidden>
+      <label>Custom probes (one per line, blank = server set)</label>
+      <textarea id="probes" rows="2"></textarea>
+    </div>
+    <label>Language</label>
+    <select id="language"></select>
+    <label>Objectives <span class="hint" style="display:inline">(none selected = all; ignored for smoke)</span></label>
+    <div class="objectives" id="objectives"></div>
+    <label>Custom objectives (JSON array, optional)</label>
+    <textarea id="custom_objectives" rows="2"
+      placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."]}]'></textarea>
+  </fieldset>
+
+  <button type="submit" id="go" style="width:100%">Run scan</button>
+</form>
+
+<section id="run">
+  <div id="runbar">
+    <span id="status">idle</span>
+    <span id="meta"></span>
+    <a id="dash" href="#" target="_blank" rel="noopener" hidden>open dashboard →</a>
+    <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+  </div>
+  <div id="log"></div>
+  <div id="results"></div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const LANGS = ["en","ar","bn","zh-Hans","zh-Hant","cs","da","nl","fi","fr","de","el","he","hi","hu",
+  "id","it","ja","ko","ms","no","pl","pt","ro","ru","es","sv","th","tr","uk","vi"];
+$("language").innerHTML = LANGS.map(l => `<option${l==="en"?" selected":""}>${l}</option>`).join("");
+
+fetch("/api/config").then(r => r.json()).then(c => {
+  $("base_url").value = c.base_url;
+  $("keyhint").textContent = c.has_env_key
+    ? "LAKERA_RED_API_KEY found in the server environment — leave blank to use it."
+    : "No LAKERA_RED_API_KEY on the server; enter a key here.";
+});
+
+fetch("/api/objectives").then(r => r.json()).then(list => {
+  const groups = {};
+  list.forEach(o => (groups[o.category] ??= []).push(o));
+  $("objectives").innerHTML = Object.entries(groups).map(([cat, items]) =>
+    `<h4>${cat}</h4>` + items.map(o =>
+      `<label><input type="checkbox" class="obj" value="${o.id}"> ${o.name}
+       <span class="hint">${o.id}</span></label>`).join("")).join("");
+});
+
+$("auth_type").onchange = e => {
+  $("auth_bearer").hidden = e.target.value !== "bearer";
+  $("auth_basic").hidden  = e.target.value !== "basic";
+  $("auth_apikey").hidden = e.target.value !== "api_key";
+};
+$("url").oninput = () => {
+  const ws = /^wss?:/i.test($("url").value.trim());
+  $("http_only").hidden = ws;
+  $("body_template").placeholder = ws ? "{{prompt}}" : '{"message": "{{prompt}}"}';
+};
+$("strategy").onchange = e => {
+  $("p_static").hidden = e.target.value !== "static";
+  $("p_crescendo").hidden = e.target.value !== "crescendo";
+  $("p_smoke").hidden = e.target.value !== "smoke";
+};
+
+const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean);
+const parseJSON = (v, fallback) => { try { return v.trim() ? JSON.parse(v) : fallback; }
+                                     catch { throw new Error("invalid JSON: " + v.slice(0, 60)); } };
+
+function targetSpec() {
+  const auth = $("auth_type").value;
+  return {
+    url: $("url").value.trim(),
+    auth_type: auth,
+    token: auth === "bearer" ? $("token_bearer").value : auth === "api_key" ? $("token_apikey").value : "",
+    username: $("username").value,
+    password: $("password").value,
+    api_key_header: $("api_key_header").value || "X-API-Key",
+    method: $("method").value,
+    body_template: $("body_template").value,
+    response_path: $("response_path").value.trim(),
+    headers: parseJSON($("headers").value, {}),
+    verify_tls: $("verify_tls").checked,
+    ca_bundle: caBundle(),
+  };
+}
+
+$("probe").onclick = async () => {
+  const out = $("probe-out");
+  out.style.display = "block"; out.textContent = "probing…";
+  try {
+    const r = await fetch("/api/probe", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ target: targetSpec() }),
+    });
+    const d = await r.json();
+    out.textContent = d.ok ? `ok (${d.ms} ms)\n\n${d.reply}`
+      : `FAILED (${d.ms} ms)\n\n${d.error}` + (d.tls_hint ? `\n\n${d.tls_hint}` : "");
+    out.style.color = d.ok ? "var(--ok)" : "var(--accent)";
+  } catch (e) { out.textContent = "FAILED\n\n" + e.message; out.style.color = "var(--accent)"; }
+};
+
+function caBundle() {
+  const mode = $("ca_mode").value;
+  if (mode === "path") return $("ca_bundle").value.trim();
+  if (mode === "upload") return $("ca_saved").value || "";
+  return "";
+}
+
+const caOut = (text, colour) => {
+  const el = $("ca-out");
+  el.style.display = "block"; el.textContent = text; el.style.color = colour || "var(--fg)";
+};
+
+$("ca_mode").onchange = () => {
+  const mode = $("ca_mode").value;
+  $("ca_path_box").hidden = mode !== "path";
+  $("ca_upload_box").hidden = mode !== "upload";
+  if (mode === "upload") loadStoredCAs();
+};
+
+async function loadStoredCAs() {
+  const list = await (await fetch("/api/ca")).json();
+  $("ca_saved").innerHTML = list.length
+    ? list.map(c => `<option value="${c.path}">${c.name} — ${c.subjects.join(", ")}</option>`).join("")
+    : `<option value="">(none stored yet)</option>`;
+}
+
+$("ca_inspect").onclick = async () => {
+  const path = $("ca_bundle").value.trim();
+  if (!path) return caOut("Enter a path first.", "var(--warn)");
+  caOut("reading…");
+  const d = await (await fetch("/api/ca/inspect", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ path }),
+  })).json();
+  caOut(d.ok ? `${d.count} certificate(s) found:\n` + d.subjects.map(x => "  - " + x).join("\n")
+             : d.error, d.ok ? "var(--ok)" : "var(--accent)");
+};
+
+$("ca_upload").onclick = async () => {
+  const file = $("ca_file").files[0], pasted = $("ca_paste").value.trim();
+  if (!file && !pasted) return caOut("Choose a file or paste a certificate.", "var(--warn)");
+  caOut("uploading…");
+  let body;
+  if (file) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = ""; buf.forEach(b => bin += String.fromCharCode(b));
+    body = { name: file.name, data_b64: btoa(bin) };
+  } else {
+    body = { name: "pasted", pem: pasted };
+  }
+  const r = await fetch("/api/ca", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  if (!r.ok) return caOut(d.detail || "upload failed", "var(--accent)");
+  await loadStoredCAs();
+  $("ca_saved").value = d.path;
+  $("ca_file").value = ""; $("ca_paste").value = "";
+  caOut(`stored ${d.name} — ${d.count} certificate(s):\n` +
+        d.subjects.map(x => "  - " + x).join("\n"), "var(--ok)");
+};
+
+$("ca_delete").onclick = async () => {
+  const name = $("ca_saved").selectedOptions[0]?.textContent.split(" — ")[0];
+  if (!name || !$("ca_saved").value) return;
+  await fetch(`/api/ca/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await loadStoredCAs();
+  caOut(`deleted ${name}`, "var(--dim)");
+};
+
+$("tlsdoc").onclick = async () => {
+  const out = $("probe-out");
+  out.style.display = "block"; out.style.color = "var(--fg)";
+  out.textContent = "inspecting the certificate chain…";
+  try {
+    const r = await fetch("/api/tls-check", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ target: targetSpec() }),
+    });
+    const d = await r.json();
+    const c = d.certificate || {};
+    out.textContent = [
+      `verdict: ${d.verdict}`,
+      c.subject ? `\ncertificate : ${c.subject}\nissued by   : ${c.issuer}` +
+                  `\nexpires     : ${c.not_after || "?"}` +
+                  (c.sans?.length ? `\nvalid for   : ${c.sans.join(", ")}` : "") : "",
+      (d.stores || []).length ? "\ntrust stores:" : "",
+      ...(d.stores || []).map(s => `  ${s.accepts ? "OK    " : "reject"}  ${s.store}` +
+                                   (s.accepts ? "" : ` (${s.error})`)),
+      "\nwhat this means:", ...(d.findings || []).map(f => "  - " + f),
+      (d.fixes || []).length ? "\nwhat to do:" : "",
+      ...(d.fixes || []).map(f => "  - " + f),
+    ].filter(Boolean).join("\n");
+    out.style.color = d.verdict === "verifiable" ? "var(--ok)"
+      : d.verdict === "no-handshake" ? "var(--warn)" : "var(--accent)";
+  } catch (e) { out.textContent = "diagnosis failed\n\n" + e.message; out.style.color = "var(--accent)"; }
+};
+
+let es = null, currentRun = null;
+
+$("form").onsubmit = async ev => {
+  ev.preventDefault();
+  $("log").innerHTML = ""; $("results").innerHTML = ""; $("dash").hidden = true;
+  const s = $("strategy").value;
+  let body;
+  try {
+    body = {
+      api_key: $("api_key").value,
+      base_url: $("base_url").value.trim(),
+      scan_name: $("scan_name").value,
+      target_name: $("target_name").value.trim(),
+      target_id: $("target_id").value.trim(),
+      refresh_recon: $("refresh_recon").checked,
+      app_context: {
+        app_description: $("app_description").value.trim(),
+        allowed_actions: lines($("allowed_actions").value),
+        forbidden_actions: lines($("forbidden_actions").value),
+      },
+      ground_truth: {
+        system_prompt: $("system_prompt").value.trim(),
+        tools: lines($("tools").value),
+      },
+      strategy: {
+        name: s,
+        number_of_probes: s === "static" ? +$("number_of_probes").value : null,
+        max_turns: s === "crescendo" ? +$("max_turns").value : null,
+        max_retries: s === "crescendo" ? +$("max_retries").value : null,
+        early_stop_score: s === "crescendo" ? +$("early_stop_score").value : null,
+        probes: s === "smoke" ? lines($("probes").value) : null,
+      },
+      objectives: [...document.querySelectorAll(".obj:checked")].map(c => c.value),
+      custom_objectives: parseJSON($("custom_objectives").value, []),
+      concurrency: +$("concurrency").value,
+      language: $("language").value,
+      target: targetSpec(),
+    };
+  } catch (e) { setStatus("error: " + e.message); return; }
+
+  $("go").disabled = true;
+  const r = await fetch("/api/scans", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    setStatus("error: " + ((await r.json().catch(() => ({}))).detail || r.status));
+    $("go").disabled = false; return;
+  }
+  currentRun = (await r.json()).run_id;
+  $("cancel").hidden = false;
+  listen(currentRun);
+};
+
+$("cancel").onclick = () => currentRun && fetch(`/api/scans/${currentRun}/cancel`, {method: "POST"});
+
+function setStatus(t) { $("status").textContent = t; }
+
+function listen(runId) {
+  es?.close();
+  es = new EventSource(`/api/scans/${runId}/events`);
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === "log") addLog(d);
+    else if (d.type === "status") {
+      setStatus(d.status);
+      $("meta").textContent = [d.target_id && "target " + d.target_id,
+                               d.scan_id && "scan " + d.scan_id].filter(Boolean).join("  ·  ");
+      if (d.dashboard_link) { $("dash").href = d.dashboard_link; $("dash").hidden = false; }
+      if (d.results) renderResults(d.results);
+      if (d.error) addLog({level: "error", message: d.error});
+    } else if (d.type === "end") {
+      es.close(); $("go").disabled = false; $("cancel").hidden = true;
+    }
+  };
+  es.onerror = () => { es.close(); $("go").disabled = false; $("cancel").hidden = true; };
+}
+
+function addLog(d) {
+  const el = document.createElement("div");
+  el.className = "l " + d.level;
+  const f = d.fields ? ` <span class="fields">${escape_(JSON.stringify(d.fields))}</span>` : "";
+  el.innerHTML = `<span class="lv">${d.level}</span><span class="msg">${escape_(d.message)}${f}</span>`;
+  const log = $("log"), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+  log.appendChild(el);
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+const escape_ = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function renderResults(res) {
+  const rows = res.results || [];
+  if (!rows.length) { $("results").innerHTML = "<p class='hint'>No result entries.</p>"; return; }
+  $("results").innerHTML = `<table><thead><tr><th>Objective</th><th>Verdict</th><th>Score</th>
+    <th>Explanation</th></tr></thead><tbody>` + rows.map(r => {
+      const e = r.evaluation || {};
+      const pill = r.error ? `<span class="pill err">error</span>`
+        : r.isSuccessful ? `<span class="pill fail">attack succeeded</span>`
+        : `<span class="pill pass">held</span>`;
+      return `<tr><td>${escape_(r.objectiveId)}</td><td>${pill}</td>
+        <td>${e.attackSuccessScore ?? "–"}</td>
+        <td>${escape_(r.error || e.explanation || "")}</td></tr>`;
+    }).join("") + "</tbody></table>";
+}
+</script>
+</body>
+</html>

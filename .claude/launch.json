@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "lakera-red-runner",
+      "runtimeExecutable": "/Users/arson/Documents/workspace/side project/AI Red Teaming SDK/.venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8090"],
+      "port": 8090
+    }
+  ]
+}

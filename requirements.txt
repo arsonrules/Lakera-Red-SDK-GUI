@@ -1,0 +1,5 @@
+lakera-red-sdk>=0.9.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+websockets>=13
