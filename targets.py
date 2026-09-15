@@ -320,29 +320,30 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
     events = skipped = 0
     found_at = ""
     async with httpx.AsyncClient(verify=build_ssl_context(cfg), timeout=cfg.timeout) as client:
-
-        async def open_stream(request: httpx.Request) -> httpx.Response:
-            try:
-                return await client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                # A TLS target whose stream URL is plaintext http hangs then resets: the
-                # host speaks the WebSocket over TLS, so the stream is almost surely https.
-                # (An opaque, empty-message ReadError is what this looks like otherwise.)
-                if cfg.scheme in ("https", "wss") and urlparse(base).scheme.lower() == "http":
-                    raise ValueError(
-                        f"could not open the SSE stream at {shown} over plaintext http "
-                        f"({type(exc).__name__}); this target answers the WebSocket over TLS, so "
-                        "its stream is almost certainly https — set the SSE stream URL to https://"
-                    ) from exc
+        try:
+            res = await client.send(client.build_request("GET", url, headers=headers), stream=True)
+        except httpx.TransportError as exc:
+            # A TLS target whose stream URL is plaintext http hangs then resets (an opaque,
+            # empty-message ReadError). The host answers the WebSocket over TLS, so the stream
+            # is almost surely https -- upgrade the scheme and retry once, rather than fail.
+            if not (cfg.scheme in ("https", "wss") and urlparse(base).scheme.lower() == "http"):
                 raise
-
-        res = await open_stream(client.build_request("GET", url, headers=headers))
+            base = urlunparse(urlparse(base)._replace(scheme="https"))
+            url, shown = token_url(base, quote(token, safe="")), token_url(base, "{StreamToken}")
+            _note(trace, f"plaintext http stream failed ({type(exc).__name__}); "
+                         f"retrying over https at {shown}")
+            try:
+                res = await client.send(client.build_request("GET", url, headers=headers), stream=True)
+            except httpx.TransportError as exc2:
+                raise ValueError(f"could not open the SSE stream at {shown} over https either "
+                                 f"({type(exc2).__name__}); check the stream URL and CA bundle") from exc2
         if res.status_code == 405:  # some gateways stream only from a POST
             await res.aclose()
             _note(trace, "SSE endpoint refused GET (405), retrying as POST")
             headers["Content-Type"] = "application/json"
-            res = await open_stream(
-                client.build_request("POST", url, headers=headers, content=body.encode()))
+            res = await client.send(
+                client.build_request("POST", url, headers=headers, content=body.encode()),
+                stream=True)
         try:
             _note(trace, f"SSE endpoint answered {res.status_code} "
                          f"{res.headers.get('content-type') or 'with no content-type'}")

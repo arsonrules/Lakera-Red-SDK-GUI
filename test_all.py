@@ -909,12 +909,14 @@ async def main() -> int:
         check("an SSE endpoint outside that trust is refused, with the TLS diagnosis",
               not mixed.get("ok") and bool(mixed.get("tls_hint")), json.dumps(mixed)[:220])
         # A TLS target with a plaintext-http stream URL hangs then resets (empty ReadError);
-        # the failure should name the cause and say to use https, not just the transport error.
-        plaintext = await sse_probe({"url": f"https://127.0.0.1:{CA_PORT}/sse-chat", "ca_bundle": ca_root,
-                                     "stream_url": "http://127.0.0.1:9/api/v1/stream/{StreamToken}"})
-        check("a plaintext-http stream URL on a TLS target is told to use https",
-              not plaintext.get("ok") and "https" in plaintext.get("error", "")
-              and "plaintext http" in plaintext.get("error", ""), json.dumps(plaintext)[:240])
+        # the stream should be retried over https automatically and recover, not just fail.
+        # Here http:// hits a TLS-only port, so the plaintext attempt errors, then https works.
+        upgraded = await sse_probe({"url": f"https://127.0.0.1:{CA_PORT}/sse-chat", "ca_bundle": ca_root,
+                                    "stream_url": f"http://127.0.0.1:{CA_PORT}/sse"})
+        check("a plaintext-http stream URL on a TLS target is retried over https and recovers",
+              upgraded.get("ok") and "echo:" in upgraded.get("reply", "")
+              and any("retrying over https" in s for s in upgraded.get("trace") or []),
+              json.dumps(upgraded)[:240])
 
         for label, target, expect in (
             ("a reply with no StreamToken anywhere names the key paths it held instead",

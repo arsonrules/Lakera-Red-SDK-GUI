@@ -79,7 +79,9 @@ for it; an http target can fall back to a URL in its reply or to its own URL).
    same TLS trust with the same auth and extra headers. The URL is **SSE stream
    URL** if you set one, else a `StreamUrl` / `SseUrl` the reply names (a relative
    path resolves against the target), else the target URL itself. An endpoint that
-   answers `405` to the `GET` is retried as a `POST`.
+   answers `405` to the `GET` is retried as a `POST`. If the target speaks TLS
+   (`wss`/`https`) but the stream URL is plaintext `http` and the connection fails,
+   the stream is retried over `https` automatically.
 4. Each event's `content` is appended as it arrives — the configured **Response
    path** first, then any `content` key in the event, so `choices.0.delta.content`
    works unconfigured. An event that packs several JSON documents (a `text` and a
