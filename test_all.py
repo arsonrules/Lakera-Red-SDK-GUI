@@ -11,7 +11,7 @@ drives the service end to end:
   * full scans via /api/scans: app-context target, recon-discovered target,
     reused target by id, refresh_recon, crescendo over ws, smoke, custom
     objectives, and a failing target that surfaces the error
-  * SSE targets: message.StreamToken -> Bearer -> joined content chunks, SSE
+  * SSE targets: message.StreamToken -> /stream/{StreamToken} -> joined content chunks, SSE
     framing edge cases, every failure mode, and no token reaching the UI, log or Red
 
 Run:  .venv/bin/python test_all.py
@@ -109,6 +109,7 @@ def build_echo_app() -> FastAPI:
     echo = FastAPI()
     streams: dict[str, str] = {}   # one-time StreamToken -> the reply it unlocks
     echo.state.stream_tokens = []  # every token issued, so tests can prove none leaks
+    echo.state.stream_auth = []    # the credential each SSE request arrived with
 
     def new_token(text: str, marker: str) -> str:
         token = secrets.token_urlsafe(16)
@@ -133,8 +134,9 @@ def build_echo_app() -> FastAPI:
     async def sse_chat_str(request: Request) -> dict[str, Any]:
         return {"message": json.dumps({"StreamToken": await issue(request)})}
 
-    async def stream(request: Request, mode: str = "") -> Response:
-        reply = streams.pop(request.headers.get("authorization", "").removeprefix("Bearer "), None)
+    async def stream(request: Request, token: str, mode: str = "") -> Response:
+        echo.state.stream_auth.append(auth_marker(request.headers))
+        reply = streams.pop(token, None)  # the token is the URL's last segment, not a header
         if reply is None or mode == "deny":
             return Response('{"error":"bad stream token"}', 401, media_type="application/json")
         return StreamingResponse(sse_events(reply, mode), media_type="text/event-stream")
@@ -151,16 +153,17 @@ def build_echo_app() -> FastAPI:
     async def sse_chat_post(request: Request) -> dict[str, Any]:
         return {"StreamToken": await issue(request), "StreamUrl": "/sse-post"}
 
-    @echo.get("/sse-post")
+    @echo.get("/sse-post/{token}")
     async def sse_post_get() -> Response:
         return Response('{"error":"use POST"}', 405, media_type="application/json")
 
-    @echo.post("/sse-post")
-    async def sse_post(request: Request) -> Response:
-        return await stream(request)
+    @echo.post("/sse-post/{token}")
+    async def sse_post(request: Request, token: str) -> Response:
+        return await stream(request, token)
 
     for path in ("/sse", "/sse-chat", "/sse-chat-str", "/sse-chat-top"):  # posted URL streams too
-        echo.add_api_route(path, stream, methods=["GET"])
+        echo.add_api_route(path + "/{token}", stream, methods=["GET"])
+    echo.add_api_route("/slot/{token}/events", stream, methods=["GET"])  # token mid-path
 
     @echo.websocket("/ws-sse")  # the real shape: token over the socket, answer over SSE
     async def ws_sse(sock: WebSocket) -> None:
@@ -795,7 +798,7 @@ async def main() -> int:
         check("run listing includes finished runs",
               any(r["id"] == run_id for r in (await client.get("/api/scans")).json()))
 
-        print("\n[9] SSE targets: message.StreamToken -> Bearer -> content chunks")
+        print("\n[9] SSE targets: message.StreamToken -> /stream/{StreamToken} -> content chunks")
         sse_chat = f"http://127.0.0.1:{HTTP_PORT}/sse-chat"
         sse_url = f"http://127.0.0.1:{HTTP_PORT}/sse"
         shown: list[str] = []  # everything the UI, the run log or Red sees -- checked for tokens
@@ -807,10 +810,24 @@ async def main() -> int:
 
         auth, marker = AUTHS["bearer"]
         out = await sse_probe({"url": sse_chat, "stream_url": sse_url, **auth}, prompt="hello")
-        check("StreamToken sent as the SSE bearer; content joined, noise and post-[DONE] ignored",
-              out.get("ok") and out.get("reply") == f"echo:hello|{marker}", json.dumps(out)[:220])
+        check("StreamToken ends the SSE URL path; content joined, noise and post-[DONE] ignored",
+              out.get("ok") and out.get("reply") == f"echo:hello|{marker}"
+              and any("/sse/{StreamToken}" in s for s in out.get("trace") or []),
+              json.dumps(out)[:220])
+        check("the SSE request carries the target's own auth, not the token as a bearer",
+              echo.state.stream_auth[-1] == f"bearer:{BEARER}", str(echo.state.stream_auth[-1:]))
         check("the reply streamed in as several incremental chunks", (out.get("chunks") or 0) > 1,
               str(out.get("chunks")))
+        slash = await sse_probe({"url": sse_chat, "stream_url": sse_url + "/"}, prompt="hi")
+        check("a trailing slash on the SSE URL does not double up before the token",
+              slash.get("ok") and slash.get("reply") == "echo:hi|auth=none", json.dumps(slash)[:220])
+        slot = await sse_probe({"url": sse_chat,
+                                "stream_url": f"http://127.0.0.1:{HTTP_PORT}/slot/{{StreamToken}}/events"},
+                               prompt="hi")
+        check("a {StreamToken} placeholder in the SSE URL is filled in place",
+              slot.get("ok") and slot.get("reply") == "echo:hi|auth=none"
+              and any("/slot/{StreamToken}/events" in s for s in slot.get("trace") or []),
+              json.dumps(slot)[:220])
 
         same = await sse_probe({"url": sse_chat}, prompt="hi")
         check("with no SSE URL configured the token alone opens the stream, on the target URL",
@@ -818,6 +835,7 @@ async def main() -> int:
         check("the connection test traces the hand-off step by step",
               any("HTTP 200" in s for s in same.get("trace") or [])
               and any("StreamToken found" in s for s in same.get("trace") or [])
+              and any("/sse-chat/{StreamToken}" in s for s in same.get("trace") or [])
               and any("SSE endpoint answered 200" in s for s in same.get("trace") or []),
               str(same.get("trace"))[:300])
         returned = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-url"}, prompt="hi")

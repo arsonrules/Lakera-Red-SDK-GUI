@@ -169,9 +169,10 @@
     <label>Response path</label>
     <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
     <label>SSE stream URL <span class="hint" style="display:inline">(optional)</span></label>
-    <input type="text" id="stream_url" placeholder="https://…/stream — blank = the reply is in the response">
+    <input type="text" id="stream_url" placeholder="https://…/path/to — opened as /path/to/{StreamToken}">
     <div class="hint">Any reply carrying a <code>StreamToken</code> opens an SSE stream on its own:
-      the token goes out as <code>Authorization: Bearer …</code>, each event's <code>content</code>
+      the token is appended to the stream URL as <code>/path/to/{StreamToken}</code> (or put
+      <code>{StreamToken}</code> where it belongs), each event's <code>content</code>
       is joined into the reply Red judges. An <strong>http</strong> target streams from a
       <code>StreamUrl</code> in its reply or from the target URL, so this is optional. A
       <strong>ws/wss</strong> target's reply names only the token, so set the https SSE endpoint

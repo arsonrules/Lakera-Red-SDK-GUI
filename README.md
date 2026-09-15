@@ -44,7 +44,7 @@ a streaming target, use URL `http://127.0.0.1:8801/sse-chat` with **SSE stream U
 | CA bundle | The root CA to trust — needed behind a TLS-inspection proxy or an internal PKI. Either a **path on the server** (a PEM/DER file, or a directory of them) or a certificate you **upload** through the UI. Setting it turns verification on |
 | Request body template | `{{prompt}}` = the current attack, `{{messages}}` = the full `[{role,content}]` history |
 | Response path | Dot path into the JSON reply, e.g. `choices.0.message.content`. Blank returns the whole body. For an SSE target it points inside each event instead (blank = `content`) |
-| SSE stream URL | Optional override. Streaming starts on its own when the reply carries `message.StreamToken`; set this only when the stream lives somewhere the reply doesn't name |
+| SSE stream URL | Where the stream lives; the `StreamToken` is appended as `/path/to/{StreamToken}`. Optional for http targets (streaming starts on its own when the reply carries `message.StreamToken`), required for ws/wss |
 | Extra headers | JSON object merged into every request |
 
 **Multi-turn scans.** `crescendo` escalates over several turns in one session. WS
@@ -71,11 +71,13 @@ for it; an http target can fall back to a URL in its reply or to its own URL).
 2. The `StreamToken` is read from the JSON reply — `message.StreamToken` first, then
    the shallowest `StreamToken` anywhere in it (key names match ignoring case and
    separators, and objects nested as JSON strings are opened up).
-3. The stream is opened (`GET`) with `Authorization: Bearer <StreamToken>`, over the
-   same TLS trust and with the same extra headers. It goes to **SSE stream URL** if
-   you set one, else to a `StreamUrl` / `SseUrl` the reply names (a relative path
-   resolves against the target), else to the target URL itself. An endpoint that
-   answers `405` to the `GET` is retried as a `POST`.
+3. The stream is opened (`GET`) at the stream URL with the token as its last path
+   segment — `/path/to/{StreamToken}` (URL-encoded, query string kept) — over the
+   same TLS trust and with the same auth and extra headers. The base is **SSE stream
+   URL** if you set one, else a `StreamUrl` / `SseUrl` the reply names (a relative
+   path resolves against the target), else the target URL itself. To put the token
+   somewhere other than the end, write `{StreamToken}` in the URL where it belongs.
+   An endpoint that answers `405` to the `GET` is retried as a `POST`.
 4. Each event's `content` is appended as it arrives — the configured **Response
    path** first, then any `content` key in the event, so `choices.0.delta.content`
    works unconfigured. Comments, events without `content`, `null` content and
@@ -181,7 +183,7 @@ walkthrough.
 .venv/bin/python test_all.py
 ```
 
-109 checks against real local servers and a mock relay: all 16 transport × auth
+112 checks against real local servers and a mock relay: all 16 transport × auth
 combinations; certificate trust (self-signed, private CA, supplied CA bundle,
 wrong bundle, missing bundle, and https/wss agreeing on the verdict); CA bundle
 handling (a plain directory, mixed PEM/DER, uploads, path-traversal containment,

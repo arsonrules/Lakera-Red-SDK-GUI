@@ -3,7 +3,7 @@ async chat callable the Lakera Red session handler can drive.
 
 An http(s) target may also stream its answer: it replies with
 message.StreamToken, and the text arrives from a separate SSE endpoint opened
-with that token as the bearer credential.
+with that token as the last segment of its URL: /path/to/{StreamToken}.
 
 TLS verification is opt-in (default off) so self-signed / corporate-MITM'd
 endpoints work out of the box -- this is a red-teaming tool pointed at systems
@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 import httpx
 import websockets
@@ -38,6 +38,8 @@ DEFAULT_STREAM_PATH = "content"  # the field each SSE event carries its text chu
 # Key names looked for anywhere in the target's reply, matched ignoring case and separators.
 TOKEN_KEY = "streamtoken"
 URL_KEYS = ("streamurl", "streamuri", "streamendpoint", "sseurl")
+# A {StreamToken} placeholder in the SSE URL marks where the token goes; without one it ends the path.
+TOKEN_SLOT = re.compile(r"\{\{?StreamToken\}?\}", re.I)
 
 # What HTTP will carry as a header value: printable ASCII, inner spaces allowed, none at the ends.
 HEADER_VALUE = re.compile(r"(?:[!-~](?:[ \t!-~]*[!-~])?)?")
@@ -199,6 +201,15 @@ def find_stream_url(payload: Any, cfg: TargetConfig) -> tuple[str, str]:
                      "https endpoint the token opens")
 
 
+def token_url(url: str, token: str) -> str:
+    """The SSE URL with the token as its last path segment -- /path/to/{StreamToken} --
+    or in place of a {StreamToken} placeholder. The query string is kept."""
+    if TOKEN_SLOT.search(url):
+        return TOKEN_SLOT.sub(lambda _: token, url)
+    p = urlparse(url)
+    return urlunparse(p._replace(path=f"{p.path.rstrip('/')}/{token}"))
+
+
 def find_content(event: Any, path: str) -> tuple[str | None, str]:
     """The text in one SSE event: the configured path first, then any content key.
 
@@ -267,22 +278,19 @@ async def _sse_data(res: httpx.Response) -> AsyncIterator[str]:
 async def _stream_reply(cfg: TargetConfig, payload: Any,
                         on_chunk: Callable[[str], object] | None,
                         trace: list[str] | None = None, body: str = "") -> str:
-    """Open the SSE stream with the StreamToken as the bearer and join each event's
-    content as it arrives. Errors say what went wrong, never the token or a body.
+    """Open the SSE stream at /path/to/{StreamToken} and join each event's content as
+    it arrives. Errors say what went wrong, never the token or a body.
 
-    Its own client, on the same TLS trust as the target: the SSE endpoint is a
+    Its own client, on the same TLS trust and auth as the target: the SSE endpoint is a
     separate connection (and, for a ws target, a different transport entirely)."""
     token, where = find_token(payload)
     if not token:
         raise _no_token(payload)
-    if not HEADER_VALUE.fullmatch(token):
-        raise ValueError("the StreamToken has a line break or non-ASCII character, so it "
-                         "cannot be sent as a bearer token")
-    url, why = find_stream_url(payload, cfg)
-    _note(trace, f"StreamToken found at {where}; opening SSE at {url} ({why}) with "
-                 "Authorization: Bearer <StreamToken>")
+    base, why = find_stream_url(payload, cfg)
+    # The token is a credential in the URL, so only `shown` goes in a trace or an error.
+    url, shown = token_url(base, quote(token, safe="")), token_url(base, "{StreamToken}")
+    _note(trace, f"StreamToken found at {where}; opening SSE at {shown} ({why})")
     headers = httpx.Headers({**auth_headers(cfg), **cfg.headers})
-    headers["Authorization"] = f"Bearer {token}"  # the SSE credential, not the target's auth
     headers["Accept"] = "text/event-stream"
     path = cfg.response_path or DEFAULT_STREAM_PATH
     parts: list[str] = []
@@ -300,7 +308,8 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
         try:
             _note(trace, f"SSE endpoint answered {res.status_code} "
                          f"{res.headers.get('content-type') or 'with no content-type'}")
-            res.raise_for_status()
+            if res.is_error:  # not raise_for_status(): its message quotes the URL, token and all
+                raise ValueError(f"the SSE endpoint {shown} answered HTTP {res.status_code}")
             async for data in _sse_data(res):
                 if data.strip() == "[DONE]":
                     break
@@ -323,7 +332,7 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
     _note(trace, f"{events} event(s): {len(parts)} carried text"
                  + (f" at {found_at!r}" if found_at else "") + f", {skipped} skipped")
     if not parts:
-        raise ValueError(f"the SSE stream at {url} sent {events} event(s) but none carried "
+        raise ValueError(f"the SSE stream at {shown} sent {events} event(s) but none carried "
                          f"{path!r} text (content-type: {res.headers.get('content-type')})")
     return "".join(parts)
 
