@@ -186,7 +186,7 @@ walkthrough.
 .venv/bin/python test_all.py
 ```
 
-116 checks against real local servers and a mock relay: all 16 transport × auth
+117 checks against real local servers and a mock relay: all 16 transport × auth
 combinations; certificate trust (self-signed, private CA, supplied CA bundle,
 wrong bundle, missing bundle, and https/wss agreeing on the verdict); CA bundle
 handling (a plain directory, mixed PEM/DER, uploads, path-traversal containment,
