@@ -59,6 +59,7 @@
   .l .msg { white-space:pre-wrap; word-break:break-word; flex:1; }
   .l.attack .lv { color:var(--accent); } .l.attack .msg { color:#ffb3b5; }
   .l.reply .lv { color:var(--ok); } .l.reply .msg { color:#9fe0ac; }
+  .l.stream .lv { color:var(--ok); } .l.stream .msg { color:#9fe0ac; opacity:.7; }
   .l.error .lv, .l.error .msg { color:var(--accent); }
   .l.warn .lv { color:var(--warn); }
   .l .fields { color:var(--dim); }
@@ -77,7 +78,7 @@
 <body>
 <header>
   <h1>Lakera Red Runner</h1>
-  <span>http · https · ws · wss &nbsp;|&nbsp; none · bearer · basic · api key</span>
+  <span>http · https · ws · wss · SSE &nbsp;|&nbsp; none · bearer · basic · api key</span>
 </header>
 <main>
 <form id="form" autocomplete="off">
@@ -87,7 +88,7 @@
     <label>Red Team API key</label>
     <input type="password" id="api_key" placeholder="from LAKERA_RED_API_KEY if blank">
     <div class="hint" id="keyhint"></div>
-    <label>Base URL</label>
+    <label>Lakera Red API URL</label>
     <input type="text" id="base_url">
   </fieldset>
 
@@ -167,6 +168,14 @@
       [{role,content}] history (use it for multi-turn crescendo scans).</div>
     <label>Response path</label>
     <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
+    <label>SSE stream URL <span class="hint" style="display:inline">(optional)</span></label>
+    <input type="text" id="stream_url" placeholder="https://…/stream — blank = the reply is in the response">
+    <div class="hint">Any reply carrying a <code>StreamToken</code> opens an SSE stream on its own:
+      the token goes out as <code>Authorization: Bearer …</code>, each event's <code>content</code>
+      is joined into the reply Red judges. An <strong>http</strong> target streams from a
+      <code>StreamUrl</code> in its reply or from the target URL, so this is optional. A
+      <strong>ws/wss</strong> target's reply names only the token, so set the https SSE endpoint
+      here. Response path then points inside each event.</div>
     <label>Extra headers (JSON)</label>
     <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
 
@@ -279,6 +288,11 @@ $("url").oninput = () => {
   $("http_only").hidden = ws;
   $("body_template").placeholder = ws ? "{{prompt}}" : '{"message": "{{prompt}}"}';
 };
+$("stream_url").oninput = () => {
+  $("response_path").placeholder = $("stream_url").value.trim()
+    ? "content — field inside each SSE event (blank = content)"
+    : "e.g. choices.0.message.content — blank = whole body";
+};
 $("strategy").onchange = e => {
   $("p_static").hidden = e.target.value !== "static";
   $("p_crescendo").hidden = e.target.value !== "crescendo";
@@ -301,6 +315,7 @@ function targetSpec() {
     method: $("method").value,
     body_template: $("body_template").value,
     response_path: $("response_path").value.trim(),
+    stream_url: $("stream_url").value.trim(),
     headers: parseJSON($("headers").value, {}),
     verify_tls: $("verify_tls").checked,
     ca_bundle: caBundle(),
@@ -316,8 +331,11 @@ $("probe").onclick = async () => {
       body: JSON.stringify({ target: targetSpec() }),
     });
     const d = await r.json();
-    out.textContent = d.ok ? `ok (${d.ms} ms)\n\n${d.reply}`
-      : `FAILED (${d.ms} ms)\n\n${d.error}` + (d.tls_hint ? `\n\n${d.tls_hint}` : "");
+    const via = d.chunks ? ` · ${d.chunks} SSE chunk(s)` : "";
+    const steps = (d.trace || []).map(s => "· " + s).join("\n");
+    out.textContent = (d.ok ? `ok (${d.ms} ms)${via}` : `FAILED (${d.ms} ms)`)
+      + (steps ? `\n${steps}` : "")
+      + (d.ok ? `\n\n${d.reply}` : `\n\n${d.error}` + (d.tls_hint ? `\n\n${d.tls_hint}` : ""));
     out.style.color = d.ok ? "var(--ok)" : "var(--accent)";
   } catch (e) { out.textContent = "FAILED\n\n" + e.message; out.style.color = "var(--accent)"; }
 };
@@ -421,10 +439,11 @@ $("tlsdoc").onclick = async () => {
 };
 
 let es = null, currentRun = null;
+let streaming = {};  // session id -> the log line its SSE chunks grow in, until the reply lands
 
 $("form").onsubmit = async ev => {
   ev.preventDefault();
-  $("log").innerHTML = ""; $("results").innerHTML = ""; $("dash").hidden = true;
+  $("log").innerHTML = ""; $("results").innerHTML = ""; $("dash").hidden = true; streaming = {};
   const s = $("strategy").value;
   let body;
   try {
@@ -498,25 +517,43 @@ function listen(runId) {
 }
 
 function addLog(d) {
-  const el = document.createElement("div");
-  el.className = "l " + d.level;
-  const f = d.fields ? ` <span class="fields">${escape_(JSON.stringify(d.fields))}</span>` : "";
-  el.innerHTML = `<span class="lv">${d.level}</span><span class="msg">${escape_(d.message)}${f}</span>`;
   const log = $("log"), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
-  log.appendChild(el);
+  const sid = d.fields?.session_id;
+  if (d.level === "chunk") {  // SSE text grows in one line per session as it streams
+    (streaming[sid] ??= logLine("stream", "")).lastChild.textContent += d.message;
+  } else {
+    const f = d.fields ? ` <span class="fields">${escape_(JSON.stringify(d.fields))}</span>` : "";
+    logLine(d.level, escape_(d.message) + f, d.level === "reply" && streaming[sid]);
+    delete streaming[sid];
+  }
   if (stick) log.scrollTop = log.scrollHeight;
+}
+
+function logLine(level, html, replacing) {  // the full reply takes its streamed line's place
+  const el = document.createElement("div");
+  el.className = "l " + level;
+  el.innerHTML = `<span class="lv">${level}</span><span class="msg">${html}</span>`;
+  if (replacing) replacing.replaceWith(el); else $("log").appendChild(el);
+  return el;
 }
 const escape_ = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
 function renderResults(res) {
   const rows = res.results || [];
   if (!rows.length) { $("results").innerHTML = "<p class='hint'>No result entries.</p>"; return; }
-  $("results").innerHTML = `<table><thead><tr><th>Objective</th><th>Verdict</th><th>Score</th>
+  // Fail closed: safe only when every objective was scored and none got through.
+  const broken = rows.filter(r => r.isSuccessful).length;
+  const unsure = rows.filter(r => r.error || r.evaluation?.attackSuccessScore == null).length;
+  const [cls, word] = broken ? ["fail", "malicious"] : unsure ? ["err", "inconclusive"] : ["pass", "safe"];
+  $("results").innerHTML = `<p>Lakera Red verdict: <span class="pill ${cls}">${word}</span>
+    <span class="hint">${broken} of ${rows.length} objective(s) broken` +
+    (unsure ? `, ${unsure} errored or unscored` : "") + `</span></p>` +
+    `<table><thead><tr><th>Objective</th><th>Verdict</th><th>Score</th>
     <th>Explanation</th></tr></thead><tbody>` + rows.map(r => {
       const e = r.evaluation || {};
       const pill = r.error ? `<span class="pill err">error</span>`
-        : r.isSuccessful ? `<span class="pill fail">attack succeeded</span>`
-        : `<span class="pill pass">held</span>`;
+        : r.isSuccessful ? `<span class="pill fail" title="attack succeeded">malicious</span>`
+        : `<span class="pill pass" title="attack held">safe</span>`;
       return `<tr><td>${escape_(r.objectiveId)}</td><td>${pill}</td>
         <td>${e.attackSuccessScore ?? "–"}</td>
         <td>${escape_(r.error || e.explanation || "")}</td></tr>`;

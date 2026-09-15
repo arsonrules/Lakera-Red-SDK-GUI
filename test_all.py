@@ -11,6 +11,8 @@ drives the service end to end:
   * full scans via /api/scans: app-context target, recon-discovered target,
     reused target by id, refresh_recon, crescendo over ws, smoke, custom
     objectives, and a failing target that surfaces the error
+  * SSE targets: message.StreamToken -> Bearer -> joined content chunks, SSE
+    framing edge cases, every failure mode, and no token reaching the UI, log or Red
 
 Run:  .venv/bin/python test_all.py
 """
@@ -20,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -29,6 +32,7 @@ from typing import Any
 import httpx
 import uvicorn
 from fastapi import APIRouter, FastAPI, Request, Response, WebSocket
+from fastapi.responses import StreamingResponse
 
 import app as app_module
 import app as service
@@ -63,8 +67,112 @@ def auth_marker(headers) -> str:
     return "none"
 
 
+async def sse_events(reply: str, mode: str):
+    """The raw bytes an SSE target streams, noise and framing quirks included."""
+    if mode == "empty":  # events arrive, but none carries content
+        yield b'data: {"type": "start"}\n\n'
+        yield b"data: not json\n\n"
+        return
+    if mode == "nested":  # content buried in an OpenAI-shaped delta
+        for i in range(0, len(reply), 9):
+            yield f"data: {json.dumps({'choices': [{'delta': {'content': reply[i:i + 9]}}]})}\n\n".encode()
+        return
+    if mode == "edge":
+        # One event over two data lines, its CRLF split across writes...
+        yield b'data: {"content":\r'
+        await asyncio.sleep(0.02)
+        yield b'\ndata: "edge"}\r\n\r\n'
+        # ...raw U+2028/U+0085 (str.splitlines() breaks on both) and a two-byte
+        # character split across writes...
+        blob = ("data: " + json.dumps({"content": "\u2028\u0085\u00e9"}, ensure_ascii=False)
+                + "\n\n").encode()
+        cut = blob.index("\u00e9".encode()) + 1
+        for part in (blob[:cut], blob[cut:]):
+            await asyncio.sleep(0.02)
+            yield part
+        # ...and a stream that closes without the final blank line.
+        await asyncio.sleep(0.02)
+        yield b'data: {"content": "!"}'
+        return
+    yield b": keep-alive\r\n\r\n"
+    yield b'event: meta\r\ndata: {"type": "start"}\r\n\r\n'  # no content field
+    yield b"data: {not json\r\n\r\n"                          # malformed
+    for i in range(0, len(reply), 7):
+        await asyncio.sleep(0.005)
+        yield f"data: {json.dumps({'content': reply[i:i + 7]})}\n\n".encode()
+    yield b'data: {"content": null}\n\n'
+    yield b"data: [DONE]\n\n"
+    yield b'data: {"content": "read past [DONE]"}\n\n'
+
+
 def build_echo_app() -> FastAPI:
     echo = FastAPI()
+    streams: dict[str, str] = {}   # one-time StreamToken -> the reply it unlocks
+    echo.state.stream_tokens = []  # every token issued, so tests can prove none leaks
+
+    def new_token(text: str, marker: str) -> str:
+        token = secrets.token_urlsafe(16)
+        echo.state.stream_tokens.append(token)
+        streams[token] = f"echo:{text}|auth={marker}"
+        return token
+
+    async def issue(request: Request) -> str:
+        body = await request.json()
+        text = body.get("message") or (body.get("messages") or [{}])[-1].get("content", "")
+        return new_token(text, auth_marker(request.headers))
+
+    @echo.post("/sse-chat")  # token only: the stream is the target URL itself
+    async def sse_chat(request: Request) -> dict[str, Any]:
+        return {"message": {"StreamToken": await issue(request), "Status": "Streaming"}}
+
+    @echo.post("/sse-chat-url")  # token plus the stream URL, as a relative path
+    async def sse_chat_url(request: Request) -> dict[str, Any]:
+        return {"message": {"StreamToken": await issue(request), "StreamUrl": "/sse"}}
+
+    @echo.post("/sse-chat-str")  # the message object nested as a JSON string
+    async def sse_chat_str(request: Request) -> dict[str, Any]:
+        return {"message": json.dumps({"StreamToken": await issue(request)})}
+
+    async def stream(request: Request, mode: str = "") -> Response:
+        reply = streams.pop(request.headers.get("authorization", "").removeprefix("Bearer "), None)
+        if reply is None or mode == "deny":
+            return Response('{"error":"bad stream token"}', 401, media_type="application/json")
+        return StreamingResponse(sse_events(reply, mode), media_type="text/event-stream")
+
+    @echo.post("/sse-chat-top")  # the token at the top level of the reply
+    async def sse_chat_top(request: Request) -> dict[str, Any]:
+        return {"StreamToken": await issue(request), "SessionId": "s-1"}
+
+    @echo.post("/sse-chat-deep")  # buried and differently cased, stream URL named separately
+    async def sse_chat_deep(request: Request) -> dict[str, Any]:
+        return {"data": {"result": {"stream_token": await issue(request)}}, "SseUrl": "/sse"}
+
+    @echo.post("/sse-chat-post")  # a stream that only answers POST
+    async def sse_chat_post(request: Request) -> dict[str, Any]:
+        return {"StreamToken": await issue(request), "StreamUrl": "/sse-post"}
+
+    @echo.get("/sse-post")
+    async def sse_post_get() -> Response:
+        return Response('{"error":"use POST"}', 405, media_type="application/json")
+
+    @echo.post("/sse-post")
+    async def sse_post(request: Request) -> Response:
+        return await stream(request)
+
+    for path in ("/sse", "/sse-chat", "/sse-chat-str", "/sse-chat-top"):  # posted URL streams too
+        echo.add_api_route(path, stream, methods=["GET"])
+
+    @echo.websocket("/ws-sse")  # the real shape: token over the socket, answer over SSE
+    async def ws_sse(sock: WebSocket) -> None:
+        await sock.accept()
+        marker = auth_marker(sock.headers)
+        try:
+            while True:
+                raw = await sock.receive_text()
+                token = new_token(raw, marker)
+                await sock.send_text(json.dumps({"message": {"streamToken": token}}))
+        except Exception:
+            return
 
     @echo.post("/chat")
     async def chat(request: Request) -> dict[str, Any]:
@@ -686,6 +794,134 @@ async def main() -> int:
               any(e.get("type") == "status" and e.get("status") == "done" for e in seen), "")
         check("run listing includes finished runs",
               any(r["id"] == run_id for r in (await client.get("/api/scans")).json()))
+
+        print("\n[9] SSE targets: message.StreamToken -> Bearer -> content chunks")
+        sse_chat = f"http://127.0.0.1:{HTTP_PORT}/sse-chat"
+        sse_url = f"http://127.0.0.1:{HTTP_PORT}/sse"
+        shown: list[str] = []  # everything the UI, the run log or Red sees -- checked for tokens
+
+        async def sse_probe(target: dict[str, Any], **kw: Any) -> dict[str, Any]:
+            out = await probe(client, target, **kw)
+            shown.append(json.dumps(out))
+            return out
+
+        auth, marker = AUTHS["bearer"]
+        out = await sse_probe({"url": sse_chat, "stream_url": sse_url, **auth}, prompt="hello")
+        check("StreamToken sent as the SSE bearer; content joined, noise and post-[DONE] ignored",
+              out.get("ok") and out.get("reply") == f"echo:hello|{marker}", json.dumps(out)[:220])
+        check("the reply streamed in as several incremental chunks", (out.get("chunks") or 0) > 1,
+              str(out.get("chunks")))
+
+        same = await sse_probe({"url": sse_chat}, prompt="hi")
+        check("with no SSE URL configured the token alone opens the stream, on the target URL",
+              same.get("ok") and same.get("reply") == "echo:hi|auth=none", json.dumps(same)[:220])
+        check("the connection test traces the hand-off step by step",
+              any("HTTP 200" in s for s in same.get("trace") or [])
+              and any("StreamToken found" in s for s in same.get("trace") or [])
+              and any("SSE endpoint answered 200" in s for s in same.get("trace") or []),
+              str(same.get("trace"))[:300])
+        returned = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-url"}, prompt="hi")
+        check("a StreamUrl returned beside the token is followed, resolved against the target",
+              returned.get("ok") and returned.get("reply") == "echo:hi|auth=none",
+              json.dumps(returned)[:220])
+        nested = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-str"}, prompt="hi")
+        check("a message object nested as a JSON string still yields the StreamToken",
+              nested.get("ok") and nested.get("reply") == "echo:hi|auth=none",
+              json.dumps(nested)[:220])
+
+        top = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-top"}, prompt="hi")
+        check("a StreamToken at the top level of the reply opens the stream",
+              top.get("ok") and top.get("reply") == "echo:hi|auth=none", json.dumps(top)[:220])
+        deep = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-deep"}, prompt="hi")
+        check("a buried, differently-cased stream_token and an SseUrl are both found",
+              deep.get("ok") and deep.get("reply") == "echo:hi|auth=none"
+              and any("data.result.stream_token" in s for s in deep.get("trace") or []),
+              json.dumps(deep)[:260])
+        posted = await sse_probe({"url": f"http://127.0.0.1:{HTTP_PORT}/sse-chat-post"}, prompt="hi")
+        check("a stream endpoint that refuses GET is retried as POST",
+              posted.get("ok") and posted.get("reply") == "echo:hi|auth=none"
+              and any("405" in s for s in posted.get("trace") or []), json.dumps(posted)[:260])
+        shaped = await sse_probe({"url": sse_chat, "stream_url": sse_url + "?mode=nested"},
+                                 prompt="hi")
+        check("content nested as choices.0.delta.content is found without configuring a path",
+              shaped.get("ok") and shaped.get("reply") == "echo:hi|auth=none",
+              json.dumps(shaped)[:260])
+
+        # The iamsmart shape: token comes back over the WebSocket, answer streams from SSE.
+        wsse = await sse_probe({"url": f"ws://127.0.0.1:{HTTP_PORT}/ws-sse",
+                                "body_template": "{{prompt}}", "stream_url": sse_url}, prompt="hi")
+        check("a ws target hands its StreamToken to an SSE stream and returns the content",
+              wsse.get("ok") and wsse.get("reply") == "echo:hi|auth=none"
+              and any("WS " in s for s in wsse.get("trace") or [])
+              and any("streamToken" in s for s in wsse.get("trace") or []),
+              json.dumps(wsse)[:260])
+
+        edge = await sse_probe({"url": sse_chat, "stream_url": sse_url + "?mode=edge"})
+        check("SSE framing: split CRLF, multi-line data, raw U+2028/U+0085, split UTF-8, no "
+              "final blank line", edge.get("reply") == "edge\u2028\u0085\u00e9!",
+              json.dumps(edge)[:220])
+
+        ca_sse = await sse_probe({"url": f"https://127.0.0.1:{CA_PORT}/sse-chat",
+                                  "stream_url": f"https://127.0.0.1:{CA_PORT}/sse",
+                                  "ca_bundle": ca_root})
+        check("the CA bundle verifies the SSE connection too", bool(ca_sse.get("ok")),
+              json.dumps(ca_sse)[:220])
+        mixed = await sse_probe({"url": f"https://127.0.0.1:{CA_PORT}/sse-chat", "ca_bundle": ca_root,
+                                 "stream_url": f"https://127.0.0.1:{TLS_PORT}/sse"})
+        check("an SSE endpoint outside that trust is refused, with the TLS diagnosis",
+              not mixed.get("ok") and bool(mixed.get("tls_hint")), json.dumps(mixed)[:220])
+
+        for label, target, expect in (
+            ("a reply with no StreamToken anywhere names the key paths it held instead",
+             {"url": SCHEMES["http"][0], "stream_url": sse_url}, "choices.0.message.content"),
+            ("an SSE endpoint refusing the token is reported",
+             {"url": sse_chat, "stream_url": sse_url + "?mode=deny"}, "401"),
+            ("an unreachable SSE endpoint is reported, not raised",
+             {"url": sse_chat, "stream_url": "http://127.0.0.1:9/sse"}, "ConnectError"),
+            ("a stream whose events carry no content fails clearly",
+             {"url": sse_chat, "stream_url": sse_url + "?mode=empty"}, "none carried 'content'"),
+            ("a ws target that returns a token but no stream URL says to set one",
+             {"url": f"ws://127.0.0.1:{HTTP_PORT}/ws-sse", "body_template": "{{prompt}}"},
+             "set the SSE stream URL"),
+        ):
+            got = await sse_probe(target)
+            check(label, not got.get("ok") and expect in got.get("error", ""), json.dumps(got)[:220])
+
+        pasted = await sse_probe({"url": sse_chat, "auth_type": "bearer", "token": "s3cr3t-pasted\n"})
+        check("a pasted secret with a stray newline is refused without being echoed",
+              not pasted.get("ok") and "s3cr3t-pasted" not in json.dumps(pasted),
+              json.dumps(pasted)[:200])
+
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat}, target_name="streaming-agent", api_key="test-key\n"))
+        shown.append(json.dumps(run))
+        entries = (run.get("results") or {}).get("results") or []
+        check("scan streams every turn with nothing but the target URL configured",
+              run["status"] == "done" and len(entries) == 2
+              and all(e.get("evaluation") for e in entries), json.dumps(run)[:300])
+        judged = [r for sid, rs in relay.responses.items()
+                  if sid.startswith(f"{run.get('scan_id')}-") for r in rs]
+        check("Red judged the joined streamed replies",
+              bool(judged) and all(r.startswith("echo:attack") for r in judged), str(judged)[:200])
+        check("the run log shows each reply streaming in chunk by chunk",
+              sum(e["level"] == "chunk" for e in run.get("logs") or []) > len(judged), "")
+        check("a Red API key pasted with a trailing newline is trimmed",
+              relay.auth_seen[-1] == "Bearer test-key", str(relay.auth_seen[-1:]))
+
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url + "?mode=empty"},
+            target_name="silent-stream-agent"))
+        shown.append(json.dumps(run))
+        entries = (run.get("results") or {}).get("results") or []
+        check("a stream with no content is recorded per objective, scan still completes",
+              run["status"] == "done" and len(entries) == 2 and all(e.get("error") for e in entries),
+              json.dumps(run)[:300])
+
+        shown += [m for ms in (*relay.responses.values(), *relay.errors.values()) for m in ms]
+        tokens = echo.state.stream_tokens
+        leaked = [t for t in tokens if any(t in text for text in shown)]
+        check("no StreamToken reaches the UI, the run log or Red",
+              len(tokens) > 5 and not leaked, f"{len(leaked)} of {len(tokens)} leaked")
 
     finally:
         await client.aclose()

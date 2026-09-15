@@ -1,7 +1,8 @@
 """Interactive web service for triggering Lakera Red SDK scans.
 
-Point it at any http/https/ws/wss chat endpoint, pick an auth method, choose
-objectives and a strategy, and watch the scan stream live.
+Point it at any http/https/ws/wss chat endpoint (optionally one that streams its
+reply over SSE), pick an auth method, choose objectives and a strategy, and watch
+the scan stream live.
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ class TargetSpec(BaseModel):
     method: str = "POST"
     body_template: str = ""
     response_path: str = ""
+    stream_url: str = ""
     headers: dict[str, str] = Field(default_factory=dict)
     verify_tls: bool = False
     ca_bundle: str = ""
@@ -163,7 +165,8 @@ class ScanRequest(BaseModel):
     target: TargetSpec
 
     def resolved_key(self) -> str:
-        key = self.api_key or os.environ.get("LAKERA_RED_API_KEY", "")
+        # Trimmed: a pasted newline would make httpx quote the whole key in its error.
+        key = (self.api_key or os.environ.get("LAKERA_RED_API_KEY", "")).strip()
         if not key:
             raise HTTPException(400, "No Red API key: pass api_key or set LAKERA_RED_API_KEY")
         return key
@@ -282,7 +285,10 @@ def _make_handler(run: Run, cfg: TargetConfig):
             async with open_session(cfg) as chat:
                 async for msg in session:
                     run.log("attack", msg.attack, session_id=session.id)
-                    reply = await chat(msg.attack)
+                    # ponytail: one log entry per SSE chunk so the UI shows the reply as it
+                    # streams; coalesce them if replies grow long enough to bloat the log.
+                    reply = await chat(msg.attack, on_chunk=lambda text: run.log(
+                        "chunk", text, session_id=session.id))
                     run.log("reply", reply, session_id=session.id)
                     await msg.respond(reply)
         except Exception as exc:
@@ -393,21 +399,26 @@ async def config() -> dict[str, Any]:
 
 @app.post("/api/probe")
 async def probe(req: ProbeRequest) -> dict[str, Any]:
-    """Send one message to the target so the operator can verify connectivity/auth."""
+    """Send one message to the target so the operator can verify connectivity/auth --
+    for an SSE target, the StreamToken hand-off and the stream too."""
     cfg = req.target.to_config()
+    chunks: list[str] = []
+    trace: list[str] = []  # filled in place, so a failure still reports how far it got
     started = time.monotonic()
     try:
         cfg.validate()
         async with open_session(cfg) as chat:
-            reply = await chat(req.prompt)
+            reply = await chat(req.prompt, on_chunk=chunks.append, trace=trace)
     except Exception as exc:
         return {
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
             "tls_hint": explain_tls_failure(exc, cfg),
+            "trace": trace,
             "ms": int((time.monotonic() - started) * 1000),
         }
-    return {"ok": True, "reply": reply, "ms": int((time.monotonic() - started) * 1000)}
+    return {"ok": True, "reply": reply, "ms": int((time.monotonic() - started) * 1000),
+            "trace": trace, "chunks": len(chunks) or None}
 
 
 @app.post("/api/ca")

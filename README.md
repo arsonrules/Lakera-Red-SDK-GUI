@@ -4,7 +4,8 @@ An interactive web service for triggering [Check Point AI Red Teaming](https://d
 (`lakera-red-sdk`) scans against any chat endpoint — fill in a form, watch the
 attacks and your agent's replies stream live, read the verdicts.
 
-* **Targets:** `http`, `https`, `ws`, `wss`
+* **Targets:** `http`, `https`, `ws`, `wss`, including targets that stream their
+  answer over SSE after handing back a `message.StreamToken`
 * **Auth:** none · bearer token · basic auth · API key header
 * **TLS:** certificate verification is **off by default**, so self-signed certs,
   internal CAs and break-and-inspect proxies work without any setup — or turn it on
@@ -28,8 +29,10 @@ A local echo agent plus a mock Red relay let you exercise the whole flow offline
 .venv/bin/python demo_servers.py
 ```
 
-Then in the UI set **Base URL** to `http://127.0.0.1:8803`, **URL** to
-`http://127.0.0.1:8801/chat` (or `ws://127.0.0.1:8801/ws`) and hit *Run scan*.
+Then in the UI set **Lakera Red API URL** to `http://127.0.0.1:8803`, **URL** to
+`http://127.0.0.1:8801/chat` (or `ws://127.0.0.1:8801/ws`) and hit *Run scan*. For
+a streaming target, use URL `http://127.0.0.1:8801/sse-chat` with **SSE stream URL**
+`http://127.0.0.1:8801/sse`.
 
 ## Configuring a target
 
@@ -40,7 +43,8 @@ Then in the UI set **Base URL** to `http://127.0.0.1:8803`, **URL** to
 | Verify TLS certificate | Leave off for self-signed / MITM-proxied endpoints; tick it to enforce validation |
 | CA bundle | The root CA to trust — needed behind a TLS-inspection proxy or an internal PKI. Either a **path on the server** (a PEM/DER file, or a directory of them) or a certificate you **upload** through the UI. Setting it turns verification on |
 | Request body template | `{{prompt}}` = the current attack, `{{messages}}` = the full `[{role,content}]` history |
-| Response path | Dot path into the JSON reply, e.g. `choices.0.message.content`. Blank returns the whole body |
+| Response path | Dot path into the JSON reply, e.g. `choices.0.message.content`. Blank returns the whole body. For an SSE target it points inside each event instead (blank = `content`) |
+| SSE stream URL | Optional override. Streaming starts on its own when the reply carries `message.StreamToken`; set this only when the stream lives somewhere the reply doesn't name |
 | Extra headers | JSON object merged into every request |
 
 **Multi-turn scans.** `crescendo` escalates over several turns in one session. WS
@@ -52,6 +56,44 @@ targets are stateless, so use `{{messages}}` to send the history:
 ```
 
 with response path `choices.0.message.content`.
+
+## Streaming (SSE) targets
+
+Some targets don't put the answer in the response. They return a token, and the
+text streams from an SSE endpoint. A reply carrying a `StreamToken` switches every
+turn (the connection test included) to the streaming flow — including when the
+reply arrives over a **WebSocket** (`ws`/`wss`) target: the token comes back over
+the socket, and the answer streams from the https SSE endpoint you give under **SSE
+stream URL** (a ws target's reply names only the token, so that field is required
+for it; an http target can fall back to a URL in its reply or to its own URL).
+
+1. The prompt goes to the target URL with the configured auth, CA bundle and body.
+2. The `StreamToken` is read from the JSON reply — `message.StreamToken` first, then
+   the shallowest `StreamToken` anywhere in it (key names match ignoring case and
+   separators, and objects nested as JSON strings are opened up).
+3. The stream is opened (`GET`) with `Authorization: Bearer <StreamToken>`, over the
+   same TLS trust and with the same extra headers. It goes to **SSE stream URL** if
+   you set one, else to a `StreamUrl` / `SseUrl` the reply names (a relative path
+   resolves against the target), else to the target URL itself. An endpoint that
+   answers `405` to the `GET` is retried as a `POST`.
+4. Each event's `content` is appended as it arrives — the configured **Response
+   path** first, then any `content` key in the event, so `choices.0.delta.content`
+   works unconfigured. Comments, events without `content`, `null` content and
+   malformed JSON are skipped. The stream ends at `data: [DONE]` or when the server
+   closes it.
+5. The joined text is the reply Red judges, so the verdict (**malicious** or
+   **safe**) covers what a user would have seen streamed. The run log shows the
+   text growing chunk by chunk.
+
+The connection test reports each step it took — the POST status, that the token was
+found, which stream URL was chosen and why, the SSE status and content-type, and how
+many events carried text — so a stream that won't open says exactly where it stopped.
+
+A reply with no `StreamToken` (the error lists the key paths the reply did hold), a
+refused or unreachable stream, or a stream that never sends `content` fails that
+turn with a message saying which.
+The token is never shown in the UI, written to the run log, or included in the
+error text sent to Red.
 
 ## Target profile
 
@@ -75,7 +117,7 @@ makes the judge more precise, cutting false positives.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/probe` | Send one message to the target — connectivity and auth check |
+| `POST /api/probe` | Send one message to the target — connectivity and auth check. For an SSE target the reply is the joined stream, and `chunks` counts its pieces |
 | `POST /api/scans` | Start a scan; returns `{"run_id": …}` |
 | `GET /api/scans/{id}` | Snapshot: status, scan id, dashboard link, results, logs |
 | `GET /api/scans/{id}/events` | Server-sent events: live attacks, replies and status |
@@ -139,19 +181,23 @@ walkthrough.
 .venv/bin/python test_all.py
 ```
 
-83 checks against real local servers and a mock relay: all 16 transport × auth
+109 checks against real local servers and a mock relay: all 16 transport × auth
 combinations; certificate trust (self-signed, private CA, supplied CA bundle,
 wrong bundle, missing bundle, and https/wss agreeing on the verdict); CA bundle
 handling (a plain directory, mixed PEM/DER, uploads, path-traversal containment,
 and junk/private keys refused); the TLS diagnosis across every failure mode; body templating and response extraction;
-input validation; and full scans covering static, crescendo, smoke, custom
+input validation; full scans covering static, crescendo, smoke, custom
 objectives, recon, target reuse, recon refresh, target failures and the SSE
-stream.
+stream; and streaming targets (the StreamToken hand-off, SSE framing edge cases,
+each failure mode, scans judged on the streamed reply, and no token leaking).
 
 ## Notes
 
 * The Red API key is read from the request or `LAKERA_RED_API_KEY`; it is never
   written to disk or into the run log.
+* Target secrets go out as headers only. A value with a stray newline or space is
+  refused by header name, because the HTTP library would otherwise quote it in its
+  error. The Red API key is trimmed for the same reason.
 * Runs are held in memory — restarting the service drops the history. The scan
   itself lives on the Red dashboard, which every run links to.
 * Bind to localhost. Anyone who can reach this service can make it send traffic
