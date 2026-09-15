@@ -73,6 +73,11 @@ async def sse_events(reply: str, mode: str):
         yield b'data: {"type": "start"}\n\n'
         yield b"data: not json\n\n"
         return
+    if mode == "multidoc":  # a text object and a done object packed into one SSE event
+        yield ("data: " + json.dumps({"type": "text", "content": reply})
+               + "\ndata: " + json.dumps({"type": "done", "current_node": "X"})
+               + "\n\n").encode()
+        return
     if mode == "nested":  # content buried in an OpenAI-shaped delta
         for i in range(0, len(reply), 9):
             yield f"data: {json.dumps({'choices': [{'delta': {'content': reply[i:i + 9]}}]})}\n\n".encode()
@@ -872,6 +877,13 @@ async def main() -> int:
         check("content nested as choices.0.delta.content is found without configuring a path",
               shaped.get("ok") and shaped.get("reply") == "echo:hi|auth=none",
               json.dumps(shaped)[:260])
+        # The iamsmart shape: the real answer rides in an event that also carries a
+        # trailing `done` object, so the two must be read as separate JSON documents.
+        packed = await sse_probe({"url": sse_chat, "stream_url": sse_url + "?mode=multidoc"},
+                                 prompt="hi")
+        check("an SSE event packing several JSON documents is parsed, not skipped whole",
+              packed.get("ok") and packed.get("reply") == "echo:hi|auth=none",
+              json.dumps(packed)[:260])
 
         # The iamsmart shape: token comes back over the WebSocket, answer streams from SSE.
         wsse = await sse_probe({"url": f"ws://127.0.0.1:{HTTP_PORT}/ws-sse",

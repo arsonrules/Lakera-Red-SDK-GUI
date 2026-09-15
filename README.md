@@ -82,9 +82,10 @@ for it; an http target can fall back to a URL in its reply or to its own URL).
    answers `405` to the `GET` is retried as a `POST`.
 4. Each event's `content` is appended as it arrives — the configured **Response
    path** first, then any `content` key in the event, so `choices.0.delta.content`
-   works unconfigured. Comments, events without `content`, `null` content and
-   malformed JSON are skipped. The stream ends at `data: [DONE]` or when the server
-   closes it.
+   works unconfigured. An event that packs several JSON documents (a `text` and a
+   trailing `done`, say) is read as each in turn, not skipped whole. Comments, events
+   without `content`, `null` content and malformed JSON are skipped. The stream ends
+   at `data: [DONE]` or when the server closes it.
 5. The joined text is the reply Red judges, so the verdict (**malicious** or
    **safe**) covers what a user would have seen streamed. The run log shows the
    text growing chunk by chunk.
@@ -185,7 +186,7 @@ walkthrough.
 .venv/bin/python test_all.py
 ```
 
-115 checks against real local servers and a mock relay: all 16 transport × auth
+116 checks against real local servers and a mock relay: all 16 transport × auth
 combinations; certificate trust (self-signed, private CA, supplied CA bundle,
 wrong bundle, missing bundle, and https/wss agreeing on the verdict); CA bundle
 handling (a plain directory, mixed PEM/DER, uploads, path-traversal containment,

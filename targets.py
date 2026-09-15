@@ -276,6 +276,28 @@ async def _sse_data(res: httpx.Response) -> AsyncIterator[str]:
         yield "\n".join(data)
 
 
+def _json_docs(data: str) -> Iterator[Any]:
+    """Every top-level JSON value in one SSE event's data.
+
+    Usually one, but some targets concatenate several -- a `text` object and a
+    `done` object on separate data lines of the same event, say -- which json.loads
+    rejects as a whole. raw_decode reads them one after another instead, and a single
+    object split across data lines (its newline now inside the JSON) still parses as one.
+    """
+    decoder = json.JSONDecoder()
+    index, length = 0, len(data)
+    while index < length:
+        while index < length and data[index] in " \t\r\n":
+            index += 1
+        if index >= length:
+            return
+        try:
+            value, index = decoder.raw_decode(data, index)
+        except ValueError:
+            return  # a heartbeat, a half-written event, or trailing noise
+        yield value
+
+
 async def _stream_reply(cfg: TargetConfig, payload: Any,
                         on_chunk: Callable[[str], object] | None,
                         trace: list[str] | None = None, body: str = "") -> str:
@@ -315,19 +337,18 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
                 if data.strip() == "[DONE]":
                     break
                 events += 1
-                try:
-                    event = json.loads(data)
-                except ValueError:
+                carried = False
+                for event in _json_docs(data):  # usually one, but a target may pack several
+                    piece, at = find_content(event, path)
+                    if piece is None:  # metadata, or the null content some streams sign off with
+                        continue
+                    carried = True
+                    found_at = found_at or at
+                    parts.append(piece)
+                    if piece and on_chunk:
+                        on_chunk(piece)
+                if not carried:  # a heartbeat, a half-written event, or content-free metadata
                     skipped += 1
-                    continue  # a heartbeat or a half-written event
-                piece, at = find_content(event, path)
-                if piece is None:  # metadata, or the null content some streams sign off with
-                    skipped += 1
-                    continue
-                found_at = found_at or at
-                parts.append(piece)
-                if piece and on_chunk:
-                    on_chunk(piece)
         finally:
             await res.aclose()
     _note(trace, f"{events} event(s): {len(parts)} carried text"
