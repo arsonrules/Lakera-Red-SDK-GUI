@@ -69,6 +69,9 @@ def auth_marker(headers) -> str:
 
 async def sse_events(reply: str, mode: str):
     """The raw bytes an SSE target streams, noise and framing quirks included."""
+    if mode == "hang":  # never sends content -- exercises the per-objective timeout
+        await asyncio.sleep(30)
+        return
     if mode == "empty":  # events arrive, but none carries content
         yield b'data: {"type": "start"}\n\n'
         yield b"data: not json\n\n"
@@ -115,6 +118,8 @@ def build_echo_app() -> FastAPI:
     streams: dict[str, str] = {}   # one-time StreamToken -> the reply it unlocks
     echo.state.stream_tokens = []  # every token issued, so tests can prove none leaks
     echo.state.stream_auth = []    # the credential each SSE request arrived with
+    echo.state.sse_open = 0        # SSE streams currently open -- back to 0 = all cleaned up
+    echo.state.sse_total = 0       # SSE streams ever opened -- one per streaming turn
 
     def new_token(text: str, marker: str) -> str:
         token = secrets.token_urlsafe(16)
@@ -144,7 +149,19 @@ def build_echo_app() -> FastAPI:
         reply = streams.pop(token, None)  # the token is the URL's last segment, not a header
         if reply is None or mode == "deny":
             return Response('{"error":"bad stream token"}', 401, media_type="application/json")
-        return StreamingResponse(sse_events(reply, mode), media_type="text/event-stream")
+        if "__hang__" in reply:  # a per-objective hang, chosen by the attack text
+            mode = "hang"
+
+        async def counted():  # prove each stream opens fresh and is closed after its turn
+            echo.state.sse_open += 1
+            echo.state.sse_total += 1
+            try:
+                async for chunk in sse_events(reply, mode):
+                    yield chunk
+            finally:
+                echo.state.sse_open -= 1
+
+        return StreamingResponse(counted(), media_type="text/event-stream")
 
     @echo.post("/sse-chat-top")  # the token at the top level of the reply
     async def sse_chat_top(request: Request) -> dict[str, Any]:
@@ -969,6 +986,79 @@ async def main() -> int:
         leaked = [t for t in tokens if any(t in text for text in shown)]
         check("no StreamToken reaches the UI, the run log or Red",
               len(tokens) > 5 and not leaked, f"{len(leaked)} of {len(tokens)} leaked")
+
+        print("\n[10] per-objective SSE lifecycle and optional timeout")
+        two_objs = ["security.system-prompt-extraction.1", "safety.dangerous-instructions.1"]
+
+        # A fresh SSE stream per objective, each closed before the scan reports done.
+        echo.state.sse_total = echo.state.sse_open = 0
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="lifecycle-agent",
+            objectives=two_objs))
+        entries = (run.get("results") or {}).get("results") or []
+        check("a multi-objective streaming scan completes",
+              run["status"] == "done" and len(entries) == 2, json.dumps(run)[:300])
+        check("a new SSE stream is opened for each objective (not reused)",
+              echo.state.sse_total >= 2, f"total={echo.state.sse_total}")
+        await asyncio.sleep(0.4)  # let the server-side generators finish closing
+        check("every SSE stream is closed after its objective (no leaks)",
+              echo.state.sse_open == 0, f"open={echo.state.sse_open}")
+
+        # Multi-turn objective: every turn opens and closes its own SSE, one session.
+        relay.turns_per_session = 3
+        echo.state.sse_total = echo.state.sse_open = 0
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="multiturn-sse-agent",
+            objectives=["security.system-prompt-extraction.1"], objective_timeout=30))
+        entries = (run.get("results") or {}).get("results") or []
+        conv = (entries[0].get("conversation") if entries else []) or []
+        await asyncio.sleep(0.4)
+        check("a multi-turn streaming objective runs every turn, a fresh SSE each, context kept",
+              run["status"] == "done" and len(conv) == 3 and echo.state.sse_total >= 3
+              and echo.state.sse_open == 0, f"turns={len(conv)} sse={echo.state.sse_total}")
+        relay.turns_per_session = 1
+
+        # A generous timeout on a responsive target must not fire.
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="within-timeout-agent",
+            objectives=["security.system-prompt-extraction.1"], objective_timeout=30))
+        entries = (run.get("results") or {}).get("results") or []
+        check("a responsive objective within its timeout is not marked timed out",
+              run["status"] == "done" and entries
+              and not any("timed out" in (e.get("error") or "") for e in entries),
+              json.dumps(run)[:300])
+
+        # One objective hangs, one responds: the hang times out, the other still succeeds.
+        echo.state.sse_total = echo.state.sse_open = 0
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="timeout-agent",
+            objectives=["security.system-prompt-extraction.1"],
+            custom_objectives=[{"key": "__hang__", "name": "Hang", "attack_description": "x",
+                                "success_indicators": ["y"]}],
+            objective_timeout=1))
+        entries = (run.get("results") or {}).get("results") or []
+        by_obj = {e["objectiveId"]: e for e in entries}
+        hung, live = by_obj.get("__hang__") or {}, by_obj.get("security.system-prompt-extraction.1") or {}
+        check("a hanging objective does not fail the whole scan",
+              run["status"] == "done" and len(entries) == 2, json.dumps(run)[:300])
+        check("the non-responsive objective is marked timed out",
+              "timed out" in (hung.get("error") or ""), json.dumps(hung)[:200])
+        check("a timed-out objective is finalized once (an error, no reply recorded)",
+              hung.get("evaluation") is None and not hung.get("conversation"), json.dumps(hung)[:200])
+        check("a responsive objective still succeeds alongside a timed-out one",
+              bool(live.get("evaluation")) and not live.get("error"), json.dumps(live)[:200])
+        await asyncio.sleep(0.6)  # the cancelled stream's server generator unwinds
+        check("the timed-out objective's SSE stream is cleaned up (no dangling stream)",
+              echo.state.sse_open == 0, f"open={echo.state.sse_open}")
+
+        # An SSE error on one objective must not stop a following objective.
+        run = await run_scan(client, base_payload(
+            relay_url, {"url": sse_chat, "stream_url": sse_url + "?mode=deny"},
+            target_name="sse-error-agent", objectives=two_objs))
+        entries = (run.get("results") or {}).get("results") or []
+        check("an SSE error is recorded per objective without stopping the scan",
+              run["status"] == "done" and len(entries) == 2 and all(e.get("error") for e in entries),
+              json.dumps(run)[:300])
 
     finally:
         await client.aclose()

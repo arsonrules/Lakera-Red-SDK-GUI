@@ -166,6 +166,14 @@ EOF
 Keep a stable target name so runs stay comparable, run a small `static` scan on
 every build and a deeper `crescendo` scan before a release.
 
+**Per-objective timeout.** Each objective runs over its own SSE stream, opened
+fresh and closed when the objective completes, errors, is cancelled or times out —
+so nothing leaks into the next objective. Set an optional `objective_timeout`
+(seconds) in the scan request (or the **Per-objective timeout** field) to cap how
+long each objective waits for the target: on expiry that turn is cancelled, its
+stream is closed, the objective is marked **timeout**, and the scan moves on to the
+next one rather than failing. Omit it to wait exactly as before.
+
 ## TLS problems
 
 Hitting `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`?
@@ -188,15 +196,19 @@ walkthrough.
 .venv/bin/python test_all.py
 ```
 
-117 checks against real local servers and a mock relay: all 16 transport × auth
+128 checks against real local servers and a mock relay: all 16 transport × auth
 combinations; certificate trust (self-signed, private CA, supplied CA bundle,
 wrong bundle, missing bundle, and https/wss agreeing on the verdict); CA bundle
 handling (a plain directory, mixed PEM/DER, uploads, path-traversal containment,
 and junk/private keys refused); the TLS diagnosis across every failure mode; body templating and response extraction;
 input validation; full scans covering static, crescendo, smoke, custom
 objectives, recon, target reuse, recon refresh, target failures and the SSE
-stream; and streaming targets (the StreamToken hand-off, SSE framing edge cases,
-each failure mode, scans judged on the streamed reply, and no token leaking).
+stream; streaming targets (the StreamToken hand-off, SSE framing edge cases,
+each failure mode, scans judged on the streamed reply, and no token leaking);
+and the per-objective SSE lifecycle (a fresh stream opened and closed for every
+objective, multi-turn turns each streaming in isolation, the optional timeout
+firing only on a non-responsive objective while the rest of the scan continues,
+finalised once, and cleaned up).
 
 ## Notes
 

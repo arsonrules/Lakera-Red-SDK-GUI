@@ -220,7 +220,11 @@
         </select>
       </div>
       <div><label>Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
+      <div><label>Per-objective timeout (s)</label>
+        <input type="number" id="objective_timeout" min="1" step="1" placeholder="blank = no cap"></div>
     </div>
+    <div class="hint">Optional. Caps how long each objective waits for a reply; on expiry that
+      objective is marked <em>timeout</em> and the scan moves on. Blank keeps the current behaviour.</div>
     <div id="p_static" class="row">
       <div><label>Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
     </div>
@@ -476,6 +480,7 @@ $("form").onsubmit = async ev => {
       custom_objectives: parseJSON($("custom_objectives").value, []),
       concurrency: +$("concurrency").value,
       language: $("language").value,
+      objective_timeout: $("objective_timeout").value ? +$("objective_timeout").value : null,
       target: targetSpec(),
     };
   } catch (e) { setStatus("error: " + e.message); return; }
@@ -552,7 +557,9 @@ function renderResults(res) {
     `<table><thead><tr><th>Objective</th><th>Verdict</th><th>Score</th>
     <th>Explanation</th></tr></thead><tbody>` + rows.map(r => {
       const e = r.evaluation || {};
-      const pill = r.error ? `<span class="pill err">error</span>`
+      const timedOut = r.error && /timed out/i.test(r.error);
+      const pill = timedOut ? `<span class="pill err" title="target did not respond in time">timeout</span>`
+        : r.error ? `<span class="pill err">error</span>`
         : r.isSuccessful ? `<span class="pill fail" title="attack succeeded">malicious</span>`
         : `<span class="pill pass" title="attack held">safe</span>`;
       return `<tr><td>${escape_(r.objectiveId)}</td><td>${pill}</td>

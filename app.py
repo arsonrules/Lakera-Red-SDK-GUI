@@ -161,6 +161,9 @@ class ScanRequest(BaseModel):
     custom_objectives: list[CustomObjectiveSpec] = Field(default_factory=list)
     concurrency: int = 3
     language: str = "en"
+    # Optional cap (seconds) on how long each objective waits for the target before it
+    # is marked timed out and the scan moves on. None = wait as before (no per-objective cap).
+    objective_timeout: float | None = None
     # Target under test
     target: TargetSpec
 
@@ -278,7 +281,21 @@ class RunLogger:
 # --------------------------------------------------------------------------- scan driver
 
 
-def _make_handler(run: Run, cfg: TargetConfig):
+def _make_handler(run: Run, cfg: TargetConfig, objective_timeout: float | None = None):
+    """Drive one scan session (one objective).
+
+    Each session opens its own transport via open_session -- and each streaming turn
+    its own SSE stream inside _stream_reply -- so a fresh stream is used for every
+    objective and closed on completion, error, cancellation or timeout by the context
+    managers, never reused or leaked into the next objective.
+
+    objective_timeout (optional, seconds) bounds how long a single turn waits for the
+    target. On expiry asyncio.wait_for cancels that turn, which unwinds open_session's
+    context managers and closes the turn's SSE stream and any socket; only this
+    objective is finalized as timed out (once -- wait_for yields the reply or the
+    timeout, never both) and the rest of the scan continues. Left unset (None), each
+    turn is awaited directly and behaviour is exactly as before.
+    """
     async def handler(session) -> None:
         run.log("info", "session opened", session_id=session.id)
         try:
@@ -287,8 +304,18 @@ def _make_handler(run: Run, cfg: TargetConfig):
                     run.log("attack", msg.attack, session_id=session.id)
                     # ponytail: one log entry per SSE chunk so the UI shows the reply as it
                     # streams; coalesce them if replies grow long enough to bloat the log.
-                    reply = await chat(msg.attack, on_chunk=lambda text: run.log(
+                    call = chat(msg.attack, on_chunk=lambda text: run.log(
                         "chunk", text, session_id=session.id))
+                    try:
+                        reply = (await asyncio.wait_for(call, objective_timeout)
+                                 if objective_timeout else await call)
+                    except asyncio.TimeoutError:
+                        # The turn is cancelled and its SSE stream/socket closed by the
+                        # context managers unwinding; mark just this objective, not the scan.
+                        note = (f"objective timed out after {objective_timeout:g}s "
+                                "waiting for the target")
+                        run.log("warn", note, session_id=session.id)
+                        raise RuntimeError(note) from None
                     run.log("reply", reply, session_id=session.id)
                     await msg.respond(reply)
         except Exception as exc:
@@ -306,7 +333,7 @@ def _make_handler(run: Run, cfg: TargetConfig):
 async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
     cfg = req.target.to_config()
     cfg.validate()
-    handler = _make_handler(run, cfg)
+    handler = _make_handler(run, cfg, req.objective_timeout)
     client = LakeraRedClient(
         api_key,
         base_url=req.base_url,
