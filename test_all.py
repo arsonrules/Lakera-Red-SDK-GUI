@@ -828,6 +828,14 @@ async def main() -> int:
               slot.get("ok") and slot.get("reply") == "echo:hi|auth=none"
               and any("/slot/{StreamToken}/events" in s for s in slot.get("trace") or []),
               json.dumps(slot)[:220])
+        for label, written in (("literally", sse_url + "/{StreamToken}"),
+                               ("in double braces", sse_url + "/{{StreamToken}}"),
+                               ("percent-encoded", sse_url + "/%7BStreamToken%7D?mode=nested")):
+            got = await sse_probe({"url": sse_chat, "stream_url": written}, prompt="hi")
+            check(f"/path/to/{{StreamToken}} written {label}: the token takes its place, once",
+                  got.get("ok") and got.get("reply") == "echo:hi|auth=none"
+                  and any("/sse/{StreamToken}" in s for s in got.get("trace") or []),
+                  json.dumps(got)[:260])
 
         same = await sse_probe({"url": sse_chat}, prompt="hi")
         check("with no SSE URL configured the token alone opens the stream, on the target URL",

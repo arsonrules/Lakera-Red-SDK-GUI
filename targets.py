@@ -39,7 +39,8 @@ DEFAULT_STREAM_PATH = "content"  # the field each SSE event carries its text chu
 TOKEN_KEY = "streamtoken"
 URL_KEYS = ("streamurl", "streamuri", "streamendpoint", "sseurl")
 # A {StreamToken} placeholder in the SSE URL marks where the token goes; without one it ends the path.
-TOKEN_SLOT = re.compile(r"\{\{?StreamToken\}?\}", re.I)
+# Braces may arrive percent-encoded when the URL was copied out of a browser.
+TOKEN_SLOT = re.compile(r"(?:\{|%7B){1,2}StreamToken(?:\}|%7D){1,2}", re.I)
 
 # What HTTP will carry as a header value: printable ASCII, inner spaces allowed, none at the ends.
 HEADER_VALUE = re.compile(r"(?:[!-~](?:[ \t!-~]*[!-~])?)?")
