@@ -696,6 +696,16 @@ async def main() -> int:
         bad = await probe(client, {"url": "ftp://example.com/x"})
         check("unsupported scheme rejected", not bad.get("ok") and "ftp" in bad.get("error", ""),
               json.dumps(bad)[:200])
+        url_path = await probe(client, {"url": SCHEMES["http"][0],
+                                        "response_path": "https://host.example/api/stream/{StreamToken}"})
+        check("a URL in Response path is refused with a pointer to the SSE field",
+              not url_path.get("ok") and "SSE stream URL" in url_path.get("error", "")
+              and "KeyError" not in url_path.get("error", ""), json.dumps(url_path)[:200])
+        stray = await probe(client, {"url": SCHEMES["http"][0],
+                                     "body_template": '{"chatbot_id": "{{chkp-test}}", "q": "{{prompt}}"}'})
+        check("an unfilled {{placeholder}} in the body is refused by name",
+              not stray.get("ok") and "{{chkp-test}}" in stray.get("error", ""),
+              json.dumps(stray)[:200])
         missing = await probe(client, {"url": SCHEMES["http"][0], "auth_type": "bearer"})
         check("bearer without a token rejected",
               not missing.get("ok") and "token" in missing.get("error", ""), json.dumps(missing)[:200])

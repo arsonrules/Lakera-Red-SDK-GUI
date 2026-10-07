@@ -79,6 +79,18 @@ class TargetConfig:
             raise ValueError("basic auth requires a username and/or password")
         if self.ca_bundle and not Path(self.ca_bundle).exists():
             raise ValueError(f"CA bundle not found: {self.ca_bundle}")
+        # _render fills in only these two, so any other {{...}} would reach the target verbatim.
+        for name in re.findall(r"\{\{([^{}]*)\}\}", self.body_template):
+            if name not in ("prompt", "messages"):
+                raise ValueError(f"unknown placeholder {{{{{name}}}}} in the request body — only "
+                                 "{{prompt}} and {{messages}} are filled in; write any other value "
+                                 "literally")
+        # A dot path never holds "://"; a URL here gets split on its dots and surfaces as an
+        # opaque KeyError: 'https://apiai' from the first segment.
+        if "://" in self.response_path:
+            raise ValueError("Response path looks like a URL — it is a dot path into the reply "
+                             "(e.g. choices.0.message.content); put the stream endpoint in "
+                             "'SSE stream URL' instead")
         if self.auth_type == "api_key":
             if not self.token:
                 raise ValueError("api key auth requires a key value")
