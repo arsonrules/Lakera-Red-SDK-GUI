@@ -29,3 +29,4 @@ ENV/
 *~
 .DS_Store
 *.pem
+TROUBLESHOOTING.md
