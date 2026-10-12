@@ -4,260 +4,509 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lakera Red Runner</title>
+<script>try { const t = localStorage.getItem("redrunner.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
 <style>
   :root {
     --bg:#0e1116; --panel:#151a21; --panel2:#1b222b; --line:#262e39;
-    --fg:#e6edf3; --dim:#8b98a5; --accent:#e5484d; --ok:#3fb950; --warn:#d29922;
+    --fg:#e6edf3; --dim:#8b98a5; --accent:#ec5a5f; --ok:#3fb950; --warn:#d29922;
+    --fail-bg:#3d1418; --fail-fg:#ffb3b5; --fail-line:#6b2328; --pass-bg:#122a17; --pass-fg:#9fe0ac;
+    --warn-bg:#3a2c10; --warn-fg:#e9c46a; --link:#7cc0ff; --btn:#c4363b; --on-accent:#fff; --row-line:#1b1f26;
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme=dark]) {
+    --bg:#f6f8fa; --panel:#ffffff; --panel2:#f0f3f6; --line:#d0d7de;
+    --fg:#1f2328; --dim:#59636e; --accent:#cf222e; --ok:#1a7f37; --warn:#9a6700;
+    --fail-bg:#ffebe9; --fail-fg:#a40e26; --fail-line:#ffcecb; --pass-bg:#dafbe1; --pass-fg:#116329;
+    --warn-bg:#fff8c5; --warn-fg:#7d4e00; --link:#0969da; --btn:#cf222e; --on-accent:#fff; --row-line:#eaeef2;
+    color-scheme:light;
+    }
+  }
+  :root[data-theme=light] {
+    --bg:#f6f8fa; --panel:#ffffff; --panel2:#f0f3f6; --line:#d0d7de;
+    --fg:#1f2328; --dim:#59636e; --accent:#cf222e; --ok:#1a7f37; --warn:#9a6700;
+    --fail-bg:#ffebe9; --fail-fg:#a40e26; --fail-line:#ffcecb; --pass-bg:#dafbe1; --pass-fg:#116329;
+    --warn-bg:#fff8c5; --warn-fg:#7d4e00; --link:#0969da; --btn:#cf222e; --on-accent:#fff; --row-line:#eaeef2;
+    color-scheme:light;
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
+  [hidden] { display:none !important; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); display:flex; flex-direction:column;
          font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex;
-           align-items:baseline; gap:12px; }
+  header { padding:12px 24px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap;
+           align-items:center; gap:6px 14px; }
   header h1 { font-size:16px; margin:0; letter-spacing:.02em; }
-  header span { color:var(--dim); font-size:12px; }
-  main { display:grid; grid-template-columns:minmax(380px,460px) 1fr; gap:0; height:calc(100vh - 57px); }
-  #form { overflow-y:auto; padding:20px 24px 60px; border-right:1px solid var(--line); }
-  #run { overflow:hidden; display:flex; flex-direction:column; }
-  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 16px; padding:14px 16px 16px;
-             background:var(--panel); }
-  legend { padding:0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  #hstatus { display:flex; gap:4px 14px; flex-wrap:wrap; flex:1; font-size:12px; color:var(--dim); }
+  .hs { display:inline-flex; align-items:center; gap:6px; }
+  .hs::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--dim); }
+  .hs[data-s=ok]::before { background:var(--ok); } .hs[data-s=warn]::before { background:var(--warn); }
+  .hs[data-s=fail]::before { background:var(--accent); }
+  main { display:grid; grid-template-columns:minmax(380px,460px) 1fr; gap:0; flex:1; min-height:0; }
+  .keys { font-size:11px; color:var(--dim); margin-top:6px; text-align:center; }
+  kbd { font:11px ui-monospace,Menlo,monospace; padding:0 4px; border:1px solid var(--line); border-radius:4px;
+        background:var(--panel2); }
+  #form { overflow-y:auto; padding:16px 24px 0; border-right:1px solid var(--line); display:flex;
+          flex-direction:column; }
+  #run { overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+  #tabs { display:none; }
   label { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; }
   label.inline { display:flex; align-items:center; gap:8px; margin:10px 0 0; color:var(--fg); font-size:13px; }
-  input[type=text], input[type=password], input[type=number], select, textarea {
+  input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
     width:100%; background:var(--panel2); border:1px solid var(--line); border-radius:6px;
     color:var(--fg); padding:7px 9px; font:inherit; font-size:13px; }
   textarea { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; resize:vertical; }
-  input:focus, select:focus, textarea:focus { outline:1px solid var(--accent); border-color:var(--accent); }
-  .row { display:flex; gap:10px; } .row > * { flex:1; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:9px 14px;
+  input:focus, select:focus, textarea:focus { border-color:var(--accent); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  [aria-invalid=true] { border-color:var(--accent) !important; }
+  .field-msg { font-size:12px; margin-top:4px; color:var(--accent); }
+  .field-msg.note { color:var(--warn); }
+  .row { display:flex; gap:10px; } .row > * { flex:1; min-width:0; }
+  .secret { display:flex; gap:6px; } .secret input { flex:1; min-width:0; }
+  .secret button { flex:0 0 auto; padding:6px 10px; font-size:12px; }
+  button { background:var(--btn); color:var(--on-accent); border:0; border-radius:6px; padding:9px 14px;
            font:inherit; font-weight:600; cursor:pointer; }
   button.ghost { background:var(--panel2); color:var(--fg); border:1px solid var(--line); font-weight:500; }
+  button.small { padding:5px 10px; font-size:12px; }
   button:disabled { opacity:.5; cursor:not-allowed; }
-  .objectives { max-height:190px; overflow-y:auto; border:1px solid var(--line); border-radius:6px;
-                background:var(--panel2); padding:8px 10px; }
+  .hint { font-size:12px; color:var(--dim); margin-top:4px; }
+  .hint.error { color:var(--accent); }
+
+  #cfgbar { padding:2px 0 6px; }
+  #cfgbar .btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .group-title { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em;
+                 margin:14px 0 8px; }
+  details.sec { border:1px solid var(--line); border-radius:8px; margin:0 0 10px; background:var(--panel); }
+  details.sec > summary { list-style:none; cursor:pointer; padding:10px 14px; display:flex;
+                          align-items:baseline; gap:10px; border-radius:8px; }
+  details.sec > summary::-webkit-details-marker { display:none; }
+  details.sec > summary::before { content:"▸"; color:var(--dim); display:inline-block; transition:transform .15s; }
+  details.sec[open] > summary::before { transform:rotate(90deg); }
+  details.sec > summary b { font-size:12px; text-transform:uppercase; letter-spacing:.08em; font-weight:600;
+                            white-space:nowrap; }
+  details.sec > summary .sum { color:var(--dim); font-size:12px; flex:1; min-width:0; overflow:hidden;
+                               text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+  details.sec > .body { padding:0 14px 14px; }
+  details.sec > .body > label:first-child { margin-top:0; }
+
+  .objtools { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .objtools input { flex:1; }
+  #obj_count { font-size:12px; color:var(--fg); margin:0 0 6px; }
+  .objectives { max-height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:6px;
+                background:var(--panel2); padding:4px 10px 8px; }
   .objectives h4 { margin:8px 0 4px; font-size:11px; color:var(--dim); text-transform:uppercase;
-                   letter-spacing:.06em; }
-  .objectives label { display:flex; gap:8px; align-items:flex-start; color:var(--fg); margin:3px 0;
-                      font-size:12px; cursor:pointer; }
-  .objectives input { margin-top:3px; }
-  .hint { font-size:11px; color:var(--dim); margin-top:4px; }
+                   letter-spacing:.06em; font-weight:600; }
+  .objectives h4 label { display:flex; gap:8px; align-items:center; margin:0; color:inherit; font-size:inherit; cursor:pointer; }
+  .objectives h4 .count { text-transform:none; letter-spacing:0; }
+  .objectives label.objopt { display:flex; gap:8px; align-items:flex-start; color:var(--fg); margin:3px 0;
+                             font-size:12px; cursor:pointer; }
+  .objectives label.objopt input { margin-top:3px; }
+  .objectives .none { color:var(--dim); font-size:12px; padding:6px 0; }
+
+  #actions { position:sticky; bottom:0; margin:auto -24px 0; padding:12px 24px 14px; background:var(--bg);
+             border-top:1px solid var(--line); z-index:2; }
+  #actions .row button { flex:1; }
+  .out { margin-top:10px; font-size:12px; padding:8px 10px; border-radius:6px; position:relative;
+         background:var(--panel2); border:1px solid var(--line); word-break:break-word; }
+  #actions .out { margin:0 0 10px; max-height:38vh; overflow-y:auto; }
+  .out h5 { margin:0 22px 6px 0; font-size:13px; }
+  .out .close { position:absolute; top:4px; right:6px; padding:0 6px; background:none; color:var(--dim);
+                font-size:16px; line-height:1.4; }
+  .out.ok h5 { color:var(--ok); } .out.fail h5 { color:var(--accent); } .out.warn h5 { color:var(--warn); }
+  .out pre { margin:6px 0 0; white-space:pre-wrap; font:12px/1.45 ui-monospace,Menlo,monospace; }
+  .out .sub { margin:8px 0 2px; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .out ul { margin:0; padding-left:18px; }
+  .steps { list-style:none; margin:0; padding:0; }
+  .steps li { padding-left:20px; position:relative; }
+  .steps li::before { position:absolute; left:0; content:"✓"; color:var(--ok); }
+  .steps li.failed::before { content:"✗"; color:var(--accent); }
+  .steps li.failed { color:var(--accent); }
   #ca-out { margin-top:10px; font-size:12px; font-family:ui-monospace,Menlo,monospace;
             white-space:pre-wrap; word-break:break-word; padding:8px 10px; border-radius:6px;
             background:var(--panel2); border:1px solid var(--line); display:none; }
   input[type=file] { width:100%; font-size:12px; color:var(--dim); }
-  #probe-out { margin-top:10px; font-size:12px; font-family:ui-monospace,Menlo,monospace;
-               white-space:pre-wrap; word-break:break-word; padding:8px 10px; border-radius:6px;
-               background:var(--panel2); border:1px solid var(--line); display:none; }
-  #runbar { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:14px;
+  #form-err { color:var(--accent); font-size:12px; }
+  #form-err:not(:empty) { margin:0 0 8px; }
+
+  #banner { display:flex; gap:10px; align-items:flex-start; margin:12px 20px 0; padding:10px 12px;
+            border-radius:6px; background:var(--fail-bg); color:var(--fail-fg); border:1px solid var(--fail-line); font-size:13px; }
+  #banner span { flex:1; white-space:pre-wrap; word-break:break-word; }
+  #banner button { padding:0 6px; background:none; color:inherit; font-size:16px; line-height:1; }
+  #runbar { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; gap:8px 14px;
             align-items:center; flex-wrap:wrap; }
-  #status { font-weight:600; }
-  #log { flex:1; overflow-y:auto; padding:10px 20px; font-family:ui-monospace,Menlo,monospace;
-         font-size:12px; }
-  .l { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid #1b1f26; }
+  #status { font-weight:600; display:inline-flex; align-items:center; gap:7px; }
+  #status::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--dim); }
+  #status[data-s=running]::before { background:var(--warn); animation:pulse 1.2s ease-in-out infinite; }
+  #status[data-s=done]::before { background:var(--ok); }
+  #status[data-s=failed]::before { background:var(--accent); }
+  @keyframes pulse { 50% { opacity:.3; } }
+  @media (prefers-reduced-motion: reduce) { #status[data-s=running]::before { animation:none; } }
+  #elapsed, #meta { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  .spacer { flex:1; }
+  #history { width:auto; max-width:240px; font-size:12px; padding:5px 8px; }
+  #progress { display:flex; gap:4px 16px; flex-wrap:wrap; padding:8px 20px; border-bottom:1px solid var(--line);
+              font-size:12px; color:var(--dim); }
+  #progress b { color:var(--fg); font-variant-numeric:tabular-nums; }
+  #viewtabs { display:flex; gap:2px; padding:6px 20px 0; border-bottom:1px solid var(--line); }
+  #viewtabs button { background:none; color:var(--dim); border-radius:6px 6px 0 0; padding:8px 12px;
+                     border-bottom:2px solid transparent; font-size:13px; }
+  #viewtabs button[aria-selected=true] { color:var(--fg); border-bottom-color:var(--accent); }
+  .badge { display:inline-block; min-width:18px; padding:0 6px; margin-left:4px; border-radius:99px;
+           background:var(--panel2); color:var(--fg); font-size:11px; }
+  .pane { flex:1; overflow-y:auto; padding:12px 20px 24px; min-height:0; }
+  #convs:empty::before, #log:empty::before, #results:empty::before { display:block; padding:28px 0;
+    color:var(--dim); text-align:center; font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  #convs:empty::before, #log:empty::before { content:"No run yet — configure a target and press Run scan."; }
+  #results:empty::before { content:"Results appear here when the scan finishes."; }
+  .conv { border:1px solid var(--line); border-radius:8px; background:var(--panel); margin:0 0 10px; }
+  .conv > summary { list-style:none; cursor:pointer; padding:8px 12px; display:flex; gap:10px;
+                    align-items:center; font-size:13px; }
+  .conv > summary::-webkit-details-marker { display:none; }
+  .conv > summary::before { content:"▸"; color:var(--dim); transition:transform .15s; }
+  .conv[open] > summary::before { transform:rotate(90deg); }
+  .conv > summary .sum { color:var(--dim); font-size:12px; flex:1; }
+  .turns { padding:0 12px 12px; display:flex; flex-direction:column; gap:6px; }
+  .bubble { max-width:88%; padding:7px 10px; border-radius:10px; white-space:pre-wrap; word-break:break-word;
+            font-size:13px; }
+  .bubble .who { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em; opacity:.75;
+                 margin-bottom:2px; }
+  .bubble.attack { align-self:flex-end; background:var(--fail-bg); color:var(--fail-fg); border-bottom-right-radius:3px; }
+  .bubble.reply { align-self:flex-start; background:var(--pass-bg); color:var(--pass-fg); border-bottom-left-radius:3px; }
+  .bubble.streaming { opacity:.8; }
+  .bubble.streaming .who::after { content:" · streaming…"; }
+  .note { font-size:12px; color:var(--warn); } .note.error { color:var(--accent); }
+  .sysline { font:12px/1.5 ui-monospace,Menlo,monospace; color:var(--dim); margin:0 0 8px; word-break:break-word; }
+  .sysline.warn { color:var(--warn); } .sysline.error { color:var(--accent); }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  label.chip { display:inline-flex; align-items:center; gap:6px; margin:0; padding:3px 10px; font-size:12px;
+               color:var(--fg); border:1px solid var(--line); border-radius:99px; background:var(--panel2); cursor:pointer; }
+  label.chip input { margin:0; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .l { display:flex; gap:10px; padding:3px 0; border-bottom:1px solid var(--row-line); }
   .l .lv { flex:0 0 62px; color:var(--dim); text-transform:uppercase; font-size:10px; padding-top:2px; }
-  .l .msg { white-space:pre-wrap; word-break:break-word; flex:1; }
-  .l.attack .lv { color:var(--accent); } .l.attack .msg { color:#ffb3b5; }
-  .l.reply .lv { color:var(--ok); } .l.reply .msg { color:#9fe0ac; }
-  .l.stream .lv { color:var(--ok); } .l.stream .msg { color:#9fe0ac; opacity:.7; }
+  .l .msg { white-space:pre-wrap; word-break:break-word; flex:1; min-width:0; }
+  .l.attack .lv { color:var(--accent); } .l.attack .msg { color:var(--fail-fg); }
+  .l.reply .lv { color:var(--ok); } .l.reply .msg { color:var(--pass-fg); }
   .l.error .lv, .l.error .msg { color:var(--accent); }
   .l.warn .lv { color:var(--warn); }
-  .l .fields { color:var(--dim); }
+  .tag { display:inline-block; margin:0 4px 0 0; padding:0 6px; border-radius:4px; background:var(--panel2);
+         color:var(--dim); font-size:11px; }
+  .summary { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 12px; min-width:84px; }
+  .stat span { display:block; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .stat b { font-size:18px; font-variant-numeric:tabular-nums; }
+  .stat .pill { font-size:13px; margin-top:4px; }
+  .toolbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
   table { width:100%; border-collapse:collapse; font-size:12px; }
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
+  th button { background:none; color:inherit; padding:0; font:inherit; text-transform:inherit; }
+  th[aria-sort=ascending] button::after { content:" ▲"; }
+  th[aria-sort=descending] button::after { content:" ▼"; }
+  tr.res-row { cursor:pointer; }
+  tr.res-row:hover td, tr.res-row[aria-expanded=true] td { background:var(--panel); }
+  td.objective { word-break:break-word; }
+  .clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  tr.detail td { background:var(--panel); padding:4px 12px 14px; }
+  tr.detail p { margin:6px 0; white-space:pre-wrap; }
   .pill { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px; font-weight:600; }
-  .pill.fail { background:#3d1418; color:#ff9a9d; }
-  .pill.pass { background:#122a17; color:#8fe0a3; }
-  .pill.err { background:#3a2c10; color:#e9c46a; }
-  #results { padding:0 20px 24px; overflow-y:auto; max-height:45%; border-top:1px solid var(--line); }
-  #results:empty { display:none; }
-  a { color:#7cc0ff; }
+  .pill.fail { background:var(--fail-bg); color:var(--fail-fg); }
+  .pill.pass { background:var(--pass-bg); color:var(--pass-fg); }
+  .pill.err { background:var(--warn-bg); color:var(--warn-fg); }
+  .pill.run { background:var(--panel2); color:var(--dim); }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  a { color:var(--link); }
+
+  @media (max-width: 900px) {
+    html, body { height:auto; } body { display:block; }
+    header { padding:10px 16px; }
+    #theme { margin-left:auto; } #hstatus { order:3; flex-basis:100%; }
+    main { display:block; }
+    .keys { display:none; }
+    #tabs { display:flex; position:sticky; top:0; z-index:5; background:var(--bg);
+            border-bottom:1px solid var(--line); }
+    #tabs button { flex:1; background:none; border-radius:0; color:var(--dim); padding:12px;
+                   border-bottom:2px solid transparent; }
+    #tabs button[aria-selected=true] { color:var(--fg); border-bottom-color:var(--accent); }
+    #form { border-right:0; padding:12px 16px 0; overflow:visible; }
+    #actions { margin:auto -16px 0; padding:12px 16px 14px; }
+    #run { height:calc(100dvh - 49px); min-height:420px; }
+    #runbar, #progress, #viewtabs { padding-left:16px; padding-right:16px; }
+    .pane { padding:12px 16px 20px; }
+    #banner { margin:12px 16px 0; }
+    body:not([data-view=run]) #run, body[data-view=run] #form { display:none; }
+  }
 </style>
 </head>
-<body>
+<body data-view="config">
 <header>
   <h1>Lakera Red Runner</h1>
-  <span>http · https · ws · wss · SSE &nbsp;|&nbsp; none · bearer · basic · api key</span>
+  <div id="hstatus">
+    <span class="hs" id="hs-key">Red key: checking…</span>
+    <span class="hs" id="hs-probe">Target: not tested</span>
+  </div>
+  <button type="button" class="ghost small" id="theme">Theme: system</button>
 </header>
+<nav id="tabs" role="tablist" aria-label="View">
+  <button type="button" role="tab" id="tab-config" aria-controls="form" aria-selected="true">Configure</button>
+  <button type="button" role="tab" id="tab-run" aria-controls="run" aria-selected="false">Run</button>
+</nav>
 <main>
-<form id="form" autocomplete="off">
+<form id="form" autocomplete="off" novalidate>
 
-  <fieldset>
-    <legend>Red API</legend>
-    <label>Red Team API key</label>
-    <input type="password" id="api_key" placeholder="from LAKERA_RED_API_KEY if blank">
-    <div class="hint" id="keyhint"></div>
-    <label>Lakera Red API URL</label>
-    <input type="text" id="base_url">
-  </fieldset>
-
-  <fieldset>
-    <legend>Target endpoint</legend>
-    <label>URL (http / https / ws / wss)</label>
-    <input type="text" id="url" value="http://localhost:8000/chat">
-
-    <label>Authentication</label>
-    <select id="auth_type">
-      <option value="none">None</option>
-      <option value="bearer">Bearer token</option>
-      <option value="basic">Basic auth</option>
-      <option value="api_key">API key header</option>
-    </select>
-
-    <div id="auth_bearer" hidden>
-      <label>Token</label><input type="password" id="token_bearer">
+  <div id="cfgbar">
+    <div class="row">
+      <div><label for="saved_cfg">Saved config</label>
+        <select id="saved_cfg" data-no-save><option value="">— unsaved —</option></select></div>
+      <div><label for="template">Start from a template</label>
+        <select id="template" data-no-save>
+          <option value="">Choose…</option>
+          <option value="json">Plain JSON POST</option>
+          <option value="openai">OpenAI-compatible chat</option>
+          <option value="ws-sse">WebSocket → SSE (StreamToken)</option>
+        </select></div>
     </div>
-    <div id="auth_basic" hidden>
+    <div class="btns">
+      <button type="button" class="ghost small" id="cfg_save">Save as…</button>
+      <button type="button" class="ghost small" id="cfg_delete" disabled>Delete</button>
+      <button type="button" class="ghost small" id="cfg_export">Export</button>
+      <button type="button" class="ghost small" id="cfg_import">Import</button>
+      <input type="file" id="cfg_file" accept=".json,application/json" hidden data-no-save>
+    </div>
+    <div class="hint" id="cfg-msg" role="status" aria-live="polite">Fields are remembered in this
+      browser. Keys, tokens and passwords never are.</div>
+  </div>
+
+  <div class="group-title">Lakera Red</div>
+  <details class="sec" id="sec-red" open>
+    <summary><b>Red API</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="api_key">Red Team API key</label>
+      <input type="password" id="api_key" placeholder="from LAKERA_RED_API_KEY if blank">
+      <div class="hint" id="keyhint"></div>
+      <label for="base_url">Lakera Red API URL</label>
+      <input type="text" id="base_url">
+    </div>
+  </details>
+
+  <div class="group-title">Target under test</div>
+  <details class="sec" id="sec-conn" open>
+    <summary><b>Connection</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="url">URL (http / https / ws / wss)</label>
+      <input type="text" id="url" value="http://localhost:8000/chat">
+
+      <label for="auth_type">Authentication</label>
+      <select id="auth_type">
+        <option value="none">None</option>
+        <option value="bearer">Bearer token</option>
+        <option value="basic">Basic auth</option>
+        <option value="api_key">API key header</option>
+      </select>
+
+      <div id="auth_bearer" hidden>
+        <label for="token_bearer">Token</label><input type="password" id="token_bearer">
+      </div>
+      <div id="auth_basic" hidden>
+        <div class="row">
+          <div><label for="username">Username</label><input type="text" id="username"></div>
+          <div><label for="password">Password</label><input type="password" id="password"></div>
+        </div>
+      </div>
+      <div id="auth_apikey" hidden>
+        <div class="row">
+          <div><label for="api_key_header">Header name</label><input type="text" id="api_key_header" value="X-API-Key"></div>
+          <div><label for="token_apikey">Key</label><input type="password" id="token_apikey"></div>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <details class="sec" id="sec-req" open>
+    <summary><b>Request</b><span class="sum"></span></summary>
+    <div class="body">
+      <div id="http_only">
+        <label for="method">HTTP method</label>
+        <select id="method"><option>POST</option><option>PUT</option><option>PATCH</option><option>GET</option></select>
+      </div>
+      <label for="body_template">Request body template</label>
+      <textarea id="body_template" rows="3" placeholder='{"message": "{{prompt}}"}'></textarea>
+      <div class="hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
+        [{role,content}] history (use it for multi-turn crescendo scans).</div>
+      <label for="headers">Extra headers (JSON)</label>
+      <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
+    </div>
+  </details>
+
+  <details class="sec" id="sec-resp" open>
+    <summary><b>Response</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="response_path">Response path</label>
+      <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
+      <label for="stream_url">SSE stream URL <span class="hint" style="display:inline">(optional)</span></label>
+      <input type="text" id="stream_url" placeholder="https://…/path/to/{StreamToken}">
+      <div class="hint">Any reply carrying a <code>StreamToken</code> opens an SSE stream on its own:
+        the retrieved token goes where <code>{StreamToken}</code> is written in this URL, e.g.
+        <code>/path/to/{StreamToken}</code> — left out, it is appended at the end. Each event's <code>content</code>
+        is joined into the reply Red judges. An <strong>http</strong> target streams from a
+        <code>StreamUrl</code> in its reply or from the target URL, so this is optional. A
+        <strong>ws/wss</strong> target's reply names only the token, so set the https SSE endpoint
+        here. Response path then points inside each event.</div>
+    </div>
+  </details>
+
+  <details class="sec" id="sec-tls">
+    <summary><b>TLS</b><span class="sum"></span></summary>
+    <div class="body">
+      <label class="inline"><input type="checkbox" id="verify_tls"> Verify TLS certificate</label>
+      <div class="hint">Off by default so self-signed and MITM-proxied endpoints just work.</div>
+      <label for="ca_mode">CA bundle</label>
+      <select id="ca_mode">
+        <option value="none">Default trust store</option>
+        <option value="path">Path on the server (file or directory)</option>
+        <option value="upload">Upload a certificate</option>
+      </select>
+      <div class="hint">Adds this CA to the default trust store and turns verification on — for a
+        server that omits its intermediate, or an internal CA. Use <strong>Diagnose TLS</strong> to
+        find out which one to supply.</div>
+
+      <div id="ca_path_box" hidden>
+        <label for="ca_bundle">File or directory path</label>
+        <div class="row">
+          <input type="text" id="ca_bundle" placeholder="/etc/ssl/certs/corp-root-ca.pem or /etc/ssl/certs">
+          <button type="button" class="ghost" id="ca_inspect" style="flex:0 0 auto">Inspect</button>
+        </div>
+        <div class="hint">A directory is read directly, so it does <em>not</em> need
+          <code>c_rehash</code>ing.</div>
+      </div>
+
+      <div id="ca_upload_box" hidden>
+        <label for="ca_saved">Stored bundles</label>
+        <div class="row">
+          <select id="ca_saved"></select>
+          <button type="button" class="ghost" id="ca_delete" style="flex:0 0 auto">Delete</button>
+        </div>
+        <label for="ca_file">Add one — pick a .pem / .crt / .cer / .der file</label>
+        <input type="file" id="ca_file" accept=".pem,.crt,.cer,.der,.cert,.ca-bundle">
+        <label for="ca_paste">…or paste PEM text</label>
+        <textarea id="ca_paste" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="ghost" id="ca_upload">Upload</button>
+        </div>
+      </div>
+      <div id="ca-out" role="status"></div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="ghost" id="tlsdoc">Diagnose TLS</button>
+      </div>
+      <div id="tls-out" class="out" role="status" aria-live="polite" hidden></div>
+    </div>
+  </details>
+
+  <div class="group-title">Red scan</div>
+  <details class="sec" id="sec-profile">
+    <summary><b>Target profile</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="target_name">Target name</label>
+      <input type="text" id="target_name" value="my-agent">
+      <label for="target_id">…or reuse an existing target by id</label>
+      <input type="text" id="target_id" placeholder="target_abc123 — overrides name">
+      <label for="app_description">App description</label>
+      <textarea id="app_description" rows="2"
+        placeholder="Blank + no target id = Red runs recon through your endpoint"></textarea>
       <div class="row">
-        <div><label>Username</label><input type="text" id="username"></div>
-        <div><label>Password</label><input type="password" id="password"></div>
+        <div><label for="allowed_actions">Allowed actions (one per line)</label><textarea id="allowed_actions" rows="3"></textarea></div>
+        <div><label for="forbidden_actions">Forbidden actions (one per line)</label><textarea id="forbidden_actions" rows="3"></textarea></div>
       </div>
+      <label for="system_prompt">Ground truth — system prompt</label>
+      <textarea id="system_prompt" rows="2"></textarea>
+      <label for="tools">Ground truth — tool definitions (one per line)</label>
+      <textarea id="tools" rows="2"></textarea>
+      <label class="inline"><input type="checkbox" id="refresh_recon"> Re-run recon before scanning</label>
     </div>
-    <div id="auth_apikey" hidden>
+  </details>
+
+  <details class="sec" id="sec-scan" open>
+    <summary><b>Scan</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="scan_name">Scan name</label>
+      <input type="text" id="scan_name" value="web-service scan">
       <div class="row">
-        <div><label>Header name</label><input type="text" id="api_key_header" value="X-API-Key"></div>
-        <div><label>Key</label><input type="password" id="token_apikey"></div>
+        <div><label for="strategy">Strategy</label>
+          <select id="strategy">
+            <option value="static">static — fixed probes</option>
+            <option value="crescendo">crescendo — multi-turn escalation</option>
+            <option value="smoke">smoke — canned sanity check</option>
+          </select>
+        </div>
+        <div><label for="concurrency">Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
+        <div><label for="objective_timeout">Per-objective timeout (s)</label>
+          <input type="number" id="objective_timeout" min="1" step="1" placeholder="blank = no cap"></div>
       </div>
-    </div>
-
-    <label class="inline"><input type="checkbox" id="verify_tls"> Verify TLS certificate</label>
-    <div class="hint">Off by default so self-signed and MITM-proxied endpoints just work.</div>
-    <label>CA bundle</label>
-    <select id="ca_mode">
-      <option value="none">Default trust store</option>
-      <option value="path">Path on the server (file or directory)</option>
-      <option value="upload">Upload a certificate</option>
-    </select>
-    <div class="hint">Trusts <em>this</em> root instead of the public ones, and turns verification
-      on. Use <strong>Diagnose TLS</strong> to find out which root to supply.</div>
-
-    <div id="ca_path_box" hidden>
-      <label>File or directory path</label>
-      <div class="row">
-        <input type="text" id="ca_bundle" placeholder="/etc/ssl/certs/corp-root-ca.pem or /etc/ssl/certs">
-        <button type="button" class="ghost" id="ca_inspect" style="flex:0 0 auto">Inspect</button>
+      <div class="hint">Optional. Caps how long each objective waits for a reply; on expiry that
+        objective is marked <em>timeout</em> and the scan moves on. Blank keeps the current behaviour.</div>
+      <div id="p_static" class="row">
+        <div><label for="number_of_probes">Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
       </div>
-      <div class="hint">A directory is read directly, so it does <em>not</em> need
-        <code>c_rehash</code>ing.</div>
-    </div>
-
-    <div id="ca_upload_box" hidden>
-      <label>Stored bundles</label>
-      <div class="row">
-        <select id="ca_saved"></select>
-        <button type="button" class="ghost" id="ca_delete" style="flex:0 0 auto">Delete</button>
+      <div id="p_crescendo" class="row" hidden>
+        <div><label for="max_turns">Max turns</label><input type="number" id="max_turns" value="10" min="1" max="30"></div>
+        <div><label for="max_retries">Max retries</label><input type="number" id="max_retries" value="3" min="0" max="10"></div>
+        <div><label for="early_stop_score">Early stop</label><input type="number" id="early_stop_score" value="4" min="3" max="5"></div>
       </div>
-      <label>Add one — pick a .pem / .crt / .cer / .der file</label>
-      <input type="file" id="ca_file" accept=".pem,.crt,.cer,.der,.cert,.ca-bundle">
-      <label>…or paste PEM text</label>
-      <textarea id="ca_paste" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button type="button" class="ghost" id="ca_upload">Upload</button>
+      <div id="p_smoke" hidden>
+        <label for="probes">Custom probes (one per line, blank = server set)</label>
+        <textarea id="probes" rows="2"></textarea>
       </div>
+      <label for="language">Language</label>
+      <select id="language"></select>
+      <label id="objectives-label" for="obj_search">Objectives <span class="hint" style="display:inline">(ignored for smoke)</span></label>
+      <div class="objtools">
+        <input type="search" id="obj_search" placeholder="Filter objectives" data-no-save>
+        <button type="button" class="ghost small" id="obj_clear" disabled>Clear (run all)</button>
+      </div>
+      <div id="obj_count" aria-live="polite"></div>
+      <div class="objectives" id="objectives" role="group" aria-labelledby="objectives-label"></div>
+      <label for="custom_objectives">Custom objectives (JSON array, optional)</label>
+      <textarea id="custom_objectives" rows="2"
+        placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."]}]'></textarea>
     </div>
-    <div id="ca-out"></div>
+  </details>
 
-    <div id="http_only">
-      <label>HTTP method</label>
-      <select id="method"><option>POST</option><option>PUT</option><option>PATCH</option><option>GET</option></select>
-    </div>
-    <label>Request body template</label>
-    <textarea id="body_template" rows="3" placeholder='{"message": "{{prompt}}"}'></textarea>
-    <div class="hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
-      [{role,content}] history (use it for multi-turn crescendo scans).</div>
-    <label>Response path</label>
-    <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
-    <label>SSE stream URL <span class="hint" style="display:inline">(optional)</span></label>
-    <input type="text" id="stream_url" placeholder="https://…/path/to/{StreamToken}">
-    <div class="hint">Any reply carrying a <code>StreamToken</code> opens an SSE stream on its own:
-      the retrieved token goes where <code>{StreamToken}</code> is written in this URL, e.g.
-      <code>/path/to/{StreamToken}</code> — left out, it is appended at the end. Each event's <code>content</code>
-      is joined into the reply Red judges. An <strong>http</strong> target streams from a
-      <code>StreamUrl</code> in its reply or from the target URL, so this is optional. A
-      <strong>ws/wss</strong> target's reply names only the token, so set the https SSE endpoint
-      here. Response path then points inside each event.</div>
-    <label>Extra headers (JSON)</label>
-    <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
-
-    <div class="row" style="margin-top:12px">
+  <div id="actions">
+    <div id="probe-out" class="out" role="status" aria-live="polite" hidden></div>
+    <div id="form-err" role="alert"></div>
+    <div class="row">
       <button type="button" class="ghost" id="probe">Test connection</button>
-      <button type="button" class="ghost" id="tlsdoc">Diagnose TLS</button>
+      <button type="submit" id="go" aria-keyshortcuts="Control+Enter Meta+Enter">Run scan</button>
     </div>
-    <div id="probe-out"></div>
-  </fieldset>
-
-  <fieldset>
-    <legend>Target profile</legend>
-    <label>Target name</label>
-    <input type="text" id="target_name" value="my-agent">
-    <label>…or reuse an existing target by id</label>
-    <input type="text" id="target_id" placeholder="target_abc123 — overrides name">
-    <label>App description</label>
-    <textarea id="app_description" rows="2"
-      placeholder="Blank + no target id = Red runs recon through your endpoint"></textarea>
-    <div class="row">
-      <div><label>Allowed actions (one per line)</label><textarea id="allowed_actions" rows="3"></textarea></div>
-      <div><label>Forbidden actions (one per line)</label><textarea id="forbidden_actions" rows="3"></textarea></div>
-    </div>
-    <label>Ground truth — system prompt</label>
-    <textarea id="system_prompt" rows="2"></textarea>
-    <label>Ground truth — tool definitions (one per line)</label>
-    <textarea id="tools" rows="2"></textarea>
-    <label class="inline"><input type="checkbox" id="refresh_recon"> Re-run recon before scanning</label>
-  </fieldset>
-
-  <fieldset>
-    <legend>Scan</legend>
-    <label>Scan name</label>
-    <input type="text" id="scan_name" value="web-service scan">
-    <div class="row">
-      <div><label>Strategy</label>
-        <select id="strategy">
-          <option value="static">static — fixed probes</option>
-          <option value="crescendo">crescendo — multi-turn escalation</option>
-          <option value="smoke">smoke — canned sanity check</option>
-        </select>
-      </div>
-      <div><label>Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
-      <div><label>Per-objective timeout (s)</label>
-        <input type="number" id="objective_timeout" min="1" step="1" placeholder="blank = no cap"></div>
-    </div>
-    <div class="hint">Optional. Caps how long each objective waits for a reply; on expiry that
-      objective is marked <em>timeout</em> and the scan moves on. Blank keeps the current behaviour.</div>
-    <div id="p_static" class="row">
-      <div><label>Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
-    </div>
-    <div id="p_crescendo" class="row" hidden>
-      <div><label>Max turns</label><input type="number" id="max_turns" value="10" min="1" max="30"></div>
-      <div><label>Max retries</label><input type="number" id="max_retries" value="3" min="0" max="10"></div>
-      <div><label>Early stop</label><input type="number" id="early_stop_score" value="4" min="3" max="5"></div>
-    </div>
-    <div id="p_smoke" hidden>
-      <label>Custom probes (one per line, blank = server set)</label>
-      <textarea id="probes" rows="2"></textarea>
-    </div>
-    <label>Language</label>
-    <select id="language"></select>
-    <label>Objectives <span class="hint" style="display:inline">(none selected = all; ignored for smoke)</span></label>
-    <div class="objectives" id="objectives"></div>
-    <label>Custom objectives (JSON array, optional)</label>
-    <textarea id="custom_objectives" rows="2"
-      placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."]}]'></textarea>
-  </fieldset>
-
-  <button type="submit" id="go" style="width:100%">Run scan</button>
+    <div class="keys"><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> runs the scan · <kbd>/</kbd> filters objectives</div>
+  </div>
 </form>
 
-<section id="run">
+<section id="run" aria-label="Run">
+  <div id="banner" role="alert" hidden><span></span>
+    <button type="button" aria-label="Dismiss">×</button></div>
   <div id="runbar">
-    <span id="status">idle</span>
+    <span id="status" aria-live="polite" data-s="idle">idle</span>
+    <span id="elapsed"></span>
     <span id="meta"></span>
     <a id="dash" href="#" target="_blank" rel="noopener" hidden>open dashboard →</a>
-    <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+    <span class="spacer"></span>
+    <label for="history" class="sr-only">Recent runs</label>
+    <select id="history" title="Runs are kept in the server's memory until it restarts"></select>
+    <button type="button" class="ghost small" id="cancel" hidden>Cancel</button>
   </div>
-  <div id="log"></div>
-  <div id="results"></div>
+  <div id="progress" hidden></div>
+  <div id="viewtabs" role="tablist" aria-label="Run view">
+    <button type="button" role="tab" id="vt-conv" aria-controls="pane-conv" aria-selected="true">Conversations</button>
+    <button type="button" role="tab" id="vt-raw" aria-controls="pane-raw" aria-selected="false">Raw log</button>
+    <button type="button" role="tab" id="vt-results" aria-controls="pane-results" aria-selected="false">Results<span class="badge" id="res-badge" hidden></span></button>
+  </div>
+  <div class="pane" id="pane-conv" role="tabpanel" aria-labelledby="vt-conv"><div id="convs"></div></div>
+  <div class="pane" id="pane-raw" role="tabpanel" aria-labelledby="vt-raw" hidden>
+    <div class="chips" id="filters" role="group" aria-label="Show log levels"></div>
+    <div id="log"></div>
+  </div>
+  <div class="pane" id="pane-results" role="tabpanel" aria-labelledby="vt-results" hidden><div id="results"></div></div>
 </section>
 </main>
 
@@ -267,42 +516,412 @@ const LANGS = ["en","ar","bn","zh-Hans","zh-Hant","cs","da","nl","fi","fr","de",
   "id","it","ja","ko","ms","no","pl","pt","ro","ru","es","sv","th","tr","uk","vi"];
 $("language").innerHTML = LANGS.map(l => `<option${l==="en"?" selected":""}>${l}</option>`).join("");
 
-fetch("/api/config").then(r => r.json()).then(c => {
-  $("base_url").value = c.base_url;
-  $("keyhint").textContent = c.has_env_key
-    ? "LAKERA_RED_API_KEY found in the server environment — leave blank to use it."
-    : "No LAKERA_RED_API_KEY on the server; enter a key here.";
-});
+// Builds DOM from server data with textContent only, so nothing it returns is parsed as HTML.
+function h(tag, props = {}, ...kids) {
+  const el = Object.assign(document.createElement(tag), props);
+  el.append(...kids.flat().filter(k => k != null && k !== ""));
+  return el;
+}
 
-fetch("/api/objectives").then(r => r.json()).then(list => {
-  const groups = {};
-  list.forEach(o => (groups[o.category] ??= []).push(o));
-  $("objectives").innerHTML = Object.entries(groups).map(([cat, items]) =>
-    `<h4>${cat}</h4>` + items.map(o =>
-      `<label><input type="checkbox" class="obj" value="${o.id}"> ${o.name}
-       <span class="hint">${o.id}</span></label>`).join("")).join("");
-});
-
-$("auth_type").onchange = e => {
-  $("auth_bearer").hidden = e.target.value !== "bearer";
-  $("auth_basic").hidden  = e.target.value !== "basic";
-  $("auth_apikey").hidden = e.target.value !== "api_key";
+// Browser storage can be missing or throw (private windows, blocked site data): never fatal.
+const store = {
+  get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
 };
-$("url").oninput = () => {
+const FORM_KEY = "redrunner.form.v1", CONFIGS_KEY = "redrunner.configs.v1", SECTIONS_KEY = "redrunner.sections.v1";
+const SECRETS = new Set(["api_key", "token_bearer", "token_apikey", "password", "ca_paste"]);
+
+function showView(view) {
+  document.body.dataset.view = view;
+  $("tab-config").setAttribute("aria-selected", view === "config");
+  $("tab-run").setAttribute("aria-selected", view === "run");
+}
+$("tab-config").onclick = () => showView("config");
+$("tab-run").onclick = () => showView("run");
+
+function showBanner(text, kind = "") {
+  $("banner").firstElementChild.textContent = text;
+  $("banner").dataset.kind = kind;
+  $("banner").hidden = false;
+}
+$("banner").lastElementChild.onclick = () => { $("banner").hidden = true; };
+
+// ---- header: theme, Red key and last connection test at a glance
+const THEMES = ["system", "light", "dark"];
+function applyTheme(theme) {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("theme").textContent = "Theme: " + theme;
+  try { theme === "system" ? localStorage.removeItem("redrunner.theme") : localStorage.setItem("redrunner.theme", theme); } catch {}
+}
+$("theme").onclick = () =>
+  applyTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.theme || "system") + 1) % THEMES.length]);
+applyTheme(document.documentElement.dataset.theme || "system");
+
+let hasEnvKey = false;
+function headerStatus(id, state, text) { $(id).dataset.s = state; $(id).textContent = text; }
+const keyStatus = () => $("api_key").value.trim() ? headerStatus("hs-key", "ok", "Red key: entered")
+  : hasEnvKey ? headerStatus("hs-key", "ok", "Red key: from server env") : headerStatus("hs-key", "warn", "Red key: needed");
+$("api_key").addEventListener("input", keyStatus);
+
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    if (!$("go").disabled) { showView("config"); $("form").requestSubmit(); }
+  } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey
+             && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && !e.target.isContentEditable) {
+    e.preventDefault();
+    showView("config");
+    $("sec-scan").open = true;
+    $("obj_search").focus();
+  }
+});
+
+document.querySelectorAll("input[type=password]").forEach(input => {
+  const wrap = h("div", {className: "secret"});
+  input.replaceWith(wrap);
+  const btn = h("button", {type: "button", className: "ghost", textContent: "Show"});
+  btn.setAttribute("aria-pressed", "false");
+  btn.setAttribute("aria-label", "Show " + (document.querySelector(`label[for=${input.id}]`)?.textContent || "value"));
+  btn.onclick = () => {
+    const shown = input.type === "password";
+    input.type = shown ? "text" : "password";
+    btn.textContent = shown ? "Hide" : "Show";
+    btn.setAttribute("aria-pressed", shown);
+  };
+  wrap.append(input, btn);
+});
+
+// ---- dependent visibility: one place, so restoring a saved form shows the right fields
+function refresh() {
+  const auth = $("auth_type").value, strategy = $("strategy").value, ca = $("ca_mode").value;
   const ws = /^wss?:/i.test($("url").value.trim());
+  $("auth_bearer").hidden = auth !== "bearer";
+  $("auth_basic").hidden  = auth !== "basic";
+  $("auth_apikey").hidden = auth !== "api_key";
   $("http_only").hidden = ws;
   $("body_template").placeholder = ws ? "{{prompt}}" : '{"message": "{{prompt}}"}';
-};
-$("stream_url").oninput = () => {
   $("response_path").placeholder = $("stream_url").value.trim()
     ? "content — field inside each SSE event (blank = content)"
     : "e.g. choices.0.message.content — blank = whole body";
+  $("p_static").hidden = strategy !== "static";
+  $("p_crescendo").hidden = strategy !== "crescendo";
+  $("p_smoke").hidden = strategy !== "smoke";
+  $("ca_path_box").hidden = ca !== "path";
+  $("ca_upload_box").hidden = ca !== "upload";
+  updateSummaries();
+}
+["auth_type", "strategy"].forEach(id => $(id).addEventListener("change", refresh));
+["url", "stream_url"].forEach(id => $(id).addEventListener("input", refresh));
+$("ca_mode").addEventListener("change", () => { refresh(); if ($("ca_mode").value === "upload") loadStoredCAs(); });
+
+// ---- section summaries: what a collapsed section holds, in one line
+const host = u => { try { return new URL(u).host; } catch { return ""; } };
+const SUMMARIES = {
+  "sec-red": () => [$("api_key").value ? "key entered" : "key from server env", host($("base_url").value)],
+  "sec-conn": () => {
+    const url = $("url").value.trim(), scheme = (url.match(/^(\w+):/) || [])[1];
+    return [scheme, host(url), $("auth_type").selectedOptions[0]?.text.toLowerCase()];
+  },
+  "sec-req": () => {
+    let n = 0; try { n = Object.keys(JSON.parse($("headers").value || "{}")).length; } catch {}
+    return [/^wss?:/i.test($("url").value.trim()) ? "ws message" : $("method").value,
+            $("body_template").value.trim() ? "custom body" : "default body", n ? `${n} header(s)` : ""];
+  },
+  "sec-resp": () => [$("response_path").value.trim() || ($("stream_url").value.trim() ? "content" : "whole body"),
+                     $("stream_url").value.trim() ? "SSE stream" : ""],
+  "sec-tls": () => [$("verify_tls").checked || $("ca_mode").value !== "none" ? "verified" : "not verified",
+                    $("ca_mode").value !== "none" ? "custom CA" : ""],
+  "sec-profile": () => [$("target_id").value.trim() || $("target_name").value.trim(),
+                        $("app_description").value.trim() ? "described" : "recon"],
+  "sec-scan": () => {
+    const s = $("strategy").value, n = objBoxes().filter(c => c.checked).length;
+    return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns` : "",
+            n ? `${n} objective(s)` : "all objectives", $("language").value];
+  },
 };
-$("strategy").onchange = e => {
-  $("p_static").hidden = e.target.value !== "static";
-  $("p_crescendo").hidden = e.target.value !== "crescendo";
-  $("p_smoke").hidden = e.target.value !== "smoke";
+function updateSummaries() {
+  for (const [id, f] of Object.entries(SUMMARIES))
+    $(id).querySelector(".sum").textContent = f().filter(Boolean).join(" · ");
+}
+
+const openSections = store.get(SECTIONS_KEY, {});
+document.querySelectorAll("details.sec").forEach(d => {
+  if (d.id in openSections) d.open = openSections[d.id];
+  d.addEventListener("toggle", () => { openSections[d.id] = d.open; store.set(SECTIONS_KEY, openSections); });
+});
+
+// ---- objectives picker
+let OBJECTIVES = [];
+const objBoxes = () => [...$("objectives").querySelectorAll("input.obj")];
+function renderObjectives() {
+  const groups = {};
+  OBJECTIVES.forEach(o => (groups[o.category] ??= []).push(o));
+  $("objectives").replaceChildren(...Object.entries(groups).map(([cat, items]) => {
+    const toggle = h("input", {type: "checkbox", className: "cat-toggle"});
+    toggle.dataset.noSave = "1";
+    toggle.onchange = () => {
+      group.querySelectorAll("label.objopt:not([hidden]) .obj").forEach(c => { c.checked = toggle.checked; });
+      objectivesChanged();
+    };
+    const group = h("div", {className: "cat"},
+      h("h4", {}, h("label", {}, toggle, cat, h("span", {className: "count"}))),
+      items.map(o => {
+        const box = h("input", {type: "checkbox", className: "obj", value: o.id});
+        box.onchange = objectivesChanged;
+        const opt = h("label", {className: "objopt"}, box, ` ${o.name} `, h("span", {className: "hint", textContent: o.id}));
+        opt.dataset.find = `${o.name} ${o.id} ${cat}`.toLowerCase();
+        return opt;
+      }));
+    group.dataset.cat = cat;
+    return group;
+  }), h("div", {className: "none", hidden: true, textContent: "No objective matches the filter."}));
+  updateObjCounts();
+}
+function updateObjCounts() {
+  const all = objBoxes(), picked = all.filter(c => c.checked).length;
+  document.querySelectorAll("#objectives .cat").forEach(group => {
+    const boxes = [...group.querySelectorAll(".obj")], on = boxes.filter(c => c.checked).length;
+    const toggle = group.querySelector(".cat-toggle");
+    toggle.checked = on === boxes.length;
+    toggle.indeterminate = on > 0 && on < boxes.length;
+    toggle.setAttribute("aria-label", `Select all ${group.dataset.cat}`);
+    group.querySelector(".count").textContent = ` (${on}/${boxes.length})`;
+  });
+  $("obj_count").textContent = picked ? `${picked} of ${all.length} objectives selected`
+                                      : `All ${all.length} objectives will run`;
+  $("obj_clear").disabled = !picked;
+}
+function objectivesChanged() { updateObjCounts(); updateSummaries(); saveForm(); }
+$("obj_search").oninput = () => {
+  const q = $("obj_search").value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll("#objectives .cat").forEach(group => {
+    let any = false;
+    group.querySelectorAll("label.objopt").forEach(opt => {
+      opt.hidden = !!q && !opt.dataset.find.includes(q);
+      any ||= !opt.hidden;
+    });
+    group.hidden = !any; shown += any;
+  });
+  $("objectives").querySelector(".none").hidden = shown > 0;
 };
+$("obj_clear").onclick = () => { objBoxes().forEach(c => { c.checked = false; }); objectivesChanged(); };
+
+// ---- remembered form, saved configs, templates
+function persisted() {
+  return [...$("form").querySelectorAll("input, select, textarea")].filter(el =>
+    el.id && !SECRETS.has(el.id) && el.type !== "file" && !("noSave" in el.dataset));
+}
+function snapshot() {
+  const s = {};
+  persisted().forEach(el => { s[el.id] = el.type === "checkbox" ? el.checked : el.value; });
+  s.objectives = objBoxes().filter(c => c.checked).map(c => c.value);
+  return s;
+}
+async function applySnapshot(s) {
+  persisted().forEach(el => {
+    if (!(el.id in s) || el.id === "ca_saved") return;
+    const v = s[el.id];
+    if (el.type === "checkbox") el.checked = !!v;
+    else if (el.tagName !== "SELECT" || [...el.options].some(o => o.value === String(v))) el.value = String(v ?? "");
+  });
+  if (Array.isArray(s.objectives)) objBoxes().forEach(c => { c.checked = s.objectives.includes(c.value); });
+  document.querySelectorAll(".field-msg").forEach(m => { m.textContent = ""; });
+  document.querySelectorAll("[aria-invalid]").forEach(el => el.removeAttribute("aria-invalid"));
+  refresh(); updateObjCounts();
+  if ($("ca_mode").value === "upload") {
+    await loadStoredCAs();
+    if (s.ca_saved && [...$("ca_saved").options].some(o => o.value === s.ca_saved)) $("ca_saved").value = s.ca_saved;
+  }
+  saveForm();
+}
+
+let ready = false;
+const saveForm = () => { if (ready) store.set(FORM_KEY, snapshot()); };
+const TARGET_SECTIONS = ["sec-conn", "sec-req", "sec-resp", "sec-tls"];
+const edited = e => {
+  if ("noSave" in e.target.dataset) return;
+  saveForm(); updateSummaries();
+  if (TARGET_SECTIONS.includes(e.target.closest("details")?.id) && $("hs-probe").dataset.s)
+    headerStatus("hs-probe", "", "Target: changed since the last test");
+  ["probe-out", "tls-out"].forEach(id => { if ("blocked" in $(id).dataset) $(id).hidden = true; });
+};
+$("form").addEventListener("input", edited);
+$("form").addEventListener("change", edited);
+
+const cfgMsg = (text, error) => { $("cfg-msg").textContent = text; $("cfg-msg").className = "hint" + (error ? " error" : ""); };
+function renderConfigs(selected = "") {
+  const names = Object.keys(store.get(CONFIGS_KEY, {})).sort();
+  $("saved_cfg").replaceChildren(h("option", {value: "", textContent: "— unsaved —"}),
+    ...names.map(n => h("option", {value: n, textContent: n})));
+  $("saved_cfg").value = names.includes(selected) ? selected : "";
+  $("cfg_delete").disabled = !$("saved_cfg").value;
+}
+$("saved_cfg").onchange = async () => {
+  const name = $("saved_cfg").value;
+  $("cfg_delete").disabled = !name;
+  if (!name) return;
+  await applySnapshot(store.get(CONFIGS_KEY, {})[name] || {});
+  cfgMsg(`Loaded “${name}”. Secrets are not saved — enter keys and tokens again.`);
+};
+$("cfg_save").onclick = () => {
+  const name = prompt("Name this config", $("saved_cfg").value || "")?.trim();
+  if (!name) return;
+  const all = store.get(CONFIGS_KEY, {});
+  if (all[name] && !confirm(`Replace the saved config “${name}”?`)) return;
+  all[name] = snapshot();
+  store.set(CONFIGS_KEY, all);
+  renderConfigs(name);
+  cfgMsg(`Saved “${name}” in this browser (without keys, tokens or passwords).`);
+};
+$("cfg_delete").onclick = () => {
+  const name = $("saved_cfg").value;
+  if (!name || !confirm(`Delete the saved config “${name}”?`)) return;
+  const all = store.get(CONFIGS_KEY, {});
+  delete all[name];
+  store.set(CONFIGS_KEY, all);
+  renderConfigs();
+  cfgMsg(`Deleted “${name}”.`);
+};
+const configJSON = () => JSON.stringify({app: "lakera-red-runner", version: 1, config: snapshot()}, null, 2);
+$("cfg_export").onclick = () => {
+  const url = URL.createObjectURL(new Blob([configJSON()], {type: "application/json"}));
+  const name = ($("saved_cfg").value || "config").replace(/[^\w.-]+/g, "-");
+  h("a", {href: url, download: `red-runner-${name}.json`}).click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  cfgMsg("Exported without keys, tokens or passwords.");
+};
+async function importConfig(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { return cfgMsg("That file is not valid JSON.", true); }
+  const cfg = data && typeof data === "object" ? (data.config ?? data) : null;
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return cfgMsg("That file does not hold a config.", true);
+  const known = new Set([...persisted().map(el => el.id), "objectives"]);
+  const clean = Object.fromEntries(Object.entries(cfg).filter(([k]) => known.has(k)));
+  if (!Object.keys(clean).length) return cfgMsg("That file has no fields this form knows.", true);
+  await applySnapshot(clean);
+  $("saved_cfg").value = ""; $("cfg_delete").disabled = true;
+  cfgMsg(`Imported ${Object.keys(clean).length} field(s). Save it to keep it as a named config.`);
+}
+$("cfg_import").onclick = () => $("cfg_file").click();
+$("cfg_file").onchange = async () => {
+  const file = $("cfg_file").files[0];
+  if (file) await importConfig(await file.text());
+  $("cfg_file").value = "";
+};
+
+const TEMPLATES = {
+  json: {fields: {method: "POST", body_template: '{"message": "{{prompt}}"}', response_path: "", stream_url: ""},
+         note: "Plain JSON POST: the whole reply body is judged unless you set a response path."},
+  openai: {fields: {method: "POST", auth_type: "bearer", response_path: "choices.0.message.content", stream_url: "",
+                    body_template: '{"model": "YOUR_MODEL", "messages": {{messages}}}'},
+           note: "OpenAI-compatible: set the /v1/chat/completions URL, your model name and the bearer token."},
+  "ws-sse": {fields: {auth_type: "bearer", body_template: '{"data": {"text": "{{prompt}}"}}', response_path: "", stream_url: ""},
+             note: "WebSocket → SSE: set the wss:// URL, the token, and the https SSE stream URL ending in /{StreamToken}."},
+};
+$("template").onchange = async () => {
+  const t = TEMPLATES[$("template").value];
+  $("template").value = "";
+  if (!t) return;
+  await applySnapshot(t.fields);
+  ["sec-conn", "sec-req", "sec-resp"].forEach(id => { $(id).open = true; });
+  cfgMsg(t.note);
+};
+
+Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/objectives").then(r => r.json())])
+  .then(async ([c, list]) => {
+    $("base_url").value = c.base_url;
+    hasEnvKey = c.has_env_key;
+    $("keyhint").textContent = c.has_env_key
+      ? "LAKERA_RED_API_KEY found in the server environment — leave blank to use it."
+      : "No LAKERA_RED_API_KEY on the server; enter a key here.";
+    OBJECTIVES = list;
+    renderObjectives();
+    renderConfigs();
+    const saved = store.get(FORM_KEY, null);
+    if (saved) await applySnapshot(saved); else refresh();
+    keyStatus();
+    ready = true;
+    document.body.dataset.ready = "1";
+  });
+
+// ---- field checks: the client-side mirror of TargetConfig.validate(), so a value in the
+// wrong field is caught where it was typed instead of as a server error after Run.
+const PLACEHOLDERS = ["prompt", "messages"];
+const jsonError = (v, ok, message) => {
+  if (!v.trim()) return "";
+  try { return ok(JSON.parse(v)) ? "" : message; } catch { return "Not valid JSON — " + message; }
+};
+const CHECKS = {
+  url: v => !v ? "Enter the target URL."
+    : /^(https?|wss?):\/\/[^/\s]/i.test(v) ? "" : "Use an http, https, ws or wss URL.",
+  response_path: v => v.includes("://")
+    ? "This is a dot path into the reply (e.g. choices.0.message.content), not a URL — put the stream endpoint in SSE stream URL." : "",
+  body_template: v => {
+    const bad = [...v.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]).filter(n => !PLACEHOLDERS.includes(n));
+    return bad.length ? `Only {{prompt}} and {{messages}} are filled in — write ${bad.map(n => `{{${n}}}`).join(", ")} as a literal value.` : "";
+  },
+  stream_url: v => v && !/^https?:\/\/[^/\s]/i.test(v) ? "The SSE stream URL must be an http or https URL." : "",
+  headers: v => jsonError(v, o => o && typeof o === "object" && !Array.isArray(o)
+    && Object.values(o).every(x => typeof x === "string"), 'use an object of strings, e.g. {"X-Env": "staging"}.'),
+  custom_objectives: v => jsonError(v, Array.isArray, "use an array of objective objects."),
+};
+const NOTES = {
+  stream_url: v => !v && /^wss?:/i.test($("url").value.trim())
+    ? "A ws/wss target's reply names only the token — if it streams, set the https endpoint here." : "",
+};
+const TARGET_FIELDS = ["url", "response_path", "body_template", "stream_url", "headers"];
+
+// A link copied from chat as [text](url), or a JS template such as
+// .../stream/${encodeURIComponent(streamToken)}, becomes the plain URL and {StreamToken}.
+function tidyUrl(id) {
+  const el = $(id), before = el.value.trim();
+  let v = before.replace(/^\[[^\]]*\]\((.+)\)$/, "$1");
+  if (id === "stream_url")
+    v = v.replace(/\$\{\s*(?:encodeURIComponent\(\s*)?stream_?token\s*\)?\s*\}?\)?$/i, "{StreamToken}");
+  if (v === before) return "";
+  el.value = v;
+  el.dispatchEvent(new Event("input", {bubbles: true}));
+  return id === "stream_url" && v.endsWith("{StreamToken}") && !before.endsWith("{StreamToken}")
+    ? "Converted the pasted token expression to {StreamToken}." : "Removed the link formatting from the pasted URL.";
+}
+
+function fieldMsg(el) {
+  let msg = el.parentElement.querySelector(`.field-msg[data-for=${el.id}]`);
+  if (!msg) {
+    msg = h("div", {className: "field-msg", id: el.id + "-msg"});
+    msg.dataset.for = el.id;
+    el.after(msg);
+    el.setAttribute("aria-describedby", msg.id);
+  }
+  return msg;
+}
+
+function checkField(id, tidied = "") {
+  const el = $(id), v = el.value.trim();
+  const error = CHECKS[id]?.(v) || "", note = tidied || NOTES[id]?.(v) || "";
+  if (error) el.setAttribute("aria-invalid", "true"); else el.removeAttribute("aria-invalid");
+  const msg = (error || note || el.parentElement.querySelector(`.field-msg[data-for=${id}]`)) && fieldMsg(el);
+  if (msg) { msg.textContent = error || note; msg.className = "field-msg" + (error ? "" : " note"); }
+  return !error;
+}
+
+function checkFields(ids) {
+  const bad = ids.filter(id => !checkField(id, ["url", "stream_url"].includes(id) ? tidyUrl(id) : ""));
+  if (bad.length) {
+    const first = $(bad[0]);
+    first.closest("details").open = true;
+    first.focus();
+  }
+  return bad;
+}
+
+Object.keys(CHECKS).forEach(id => {
+  $(id).addEventListener("change", () => checkField(id, ["url", "stream_url"].includes(id) ? tidyUrl(id) : ""));
+  $(id).addEventListener("input", () => { if ($(id).hasAttribute("aria-invalid")) checkField(id); });
+});
+$("url").addEventListener("change", () => checkField("stream_url"));
 
 const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean);
 const parseJSON = (v, fallback) => { try { return v.trim() ? JSON.parse(v) : fallback; }
@@ -327,22 +946,40 @@ function targetSpec() {
   };
 }
 
+function showOut(id, cls, title, ...body) {
+  const out = $(id);
+  const close = h("button", {type: "button", className: "close", textContent: "×", onclick: () => { out.hidden = true; }});
+  close.setAttribute("aria-label", "Dismiss");
+  out.className = "out " + cls;
+  delete out.dataset.blocked;
+  out.replaceChildren(close, h("h5", {textContent: title}), ...body.flat().filter(Boolean));
+  out.hidden = false;
+}
+
+const fixFirst = n => `Fix the ${n === 1 ? "highlighted field" : n + " highlighted fields"} first.`;
+function blocked(id, n) { showOut(id, "fail", fixFirst(n)); $(id).dataset.blocked = "1"; }  // cleared by the next edit
+
 $("probe").onclick = async () => {
-  const out = $("probe-out");
-  out.style.display = "block"; out.textContent = "probing…";
+  const bad = checkFields(TARGET_FIELDS);
+  if (bad.length) return blocked("probe-out", bad.length);
+  showOut("probe-out", "", "Testing connection…");
   try {
     const r = await fetch("/api/probe", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ target: targetSpec() }),
     });
     const d = await r.json();
-    const via = d.chunks ? ` · ${d.chunks} SSE chunk(s)` : "";
-    const steps = (d.trace || []).map(s => "· " + s).join("\n");
-    out.textContent = (d.ok ? `ok (${d.ms} ms)${via}` : `FAILED (${d.ms} ms)`)
-      + (steps ? `\n${steps}` : "")
-      + (d.ok ? `\n\n${d.reply}` : `\n\n${d.error}` + (d.tls_hint ? `\n\n${d.tls_hint}` : ""));
-    out.style.color = d.ok ? "var(--ok)" : "var(--accent)";
-  } catch (e) { out.textContent = "FAILED\n\n" + e.message; out.style.color = "var(--accent)"; }
+    if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : "HTTP " + r.status);
+    const steps = (d.trace || []).map(s => h("li", {textContent: s}));
+    if (!d.ok) steps.push(h("li", {className: "failed", textContent: "failed here"}));
+    headerStatus("hs-probe", d.ok ? "ok" : "fail", d.ok ? `Target: connected · ${d.ms} ms` : "Target: connection failed");
+    showOut("probe-out", d.ok ? "ok" : "fail",
+      (d.ok ? "Connected" : "Connection failed") + ` · ${d.ms} ms` + (d.chunks ? ` · ${d.chunks} SSE chunk(s)` : ""),
+      steps.length ? h("ol", {className: "steps"}, steps) : null,
+      d.ok ? [h("div", {className: "sub", textContent: "Reply"}), h("pre", {textContent: d.reply})]
+           : [h("div", {className: "sub", textContent: "Error"}), h("pre", {textContent: d.error}),
+              d.tls_hint ? h("p", {textContent: d.tls_hint}) : null]);
+  } catch (e) { showOut("probe-out", "fail", "Connection test failed", h("pre", {textContent: e.message})); }
 };
 
 function caBundle() {
@@ -357,18 +994,11 @@ const caOut = (text, colour) => {
   el.style.display = "block"; el.textContent = text; el.style.color = colour || "var(--fg)";
 };
 
-$("ca_mode").onchange = () => {
-  const mode = $("ca_mode").value;
-  $("ca_path_box").hidden = mode !== "path";
-  $("ca_upload_box").hidden = mode !== "upload";
-  if (mode === "upload") loadStoredCAs();
-};
-
 async function loadStoredCAs() {
   const list = await (await fetch("/api/ca")).json();
-  $("ca_saved").innerHTML = list.length
-    ? list.map(c => `<option value="${c.path}">${c.name} — ${c.subjects.join(", ")}</option>`).join("")
-    : `<option value="">(none stored yet)</option>`;
+  $("ca_saved").replaceChildren(...(list.length
+    ? list.map(c => h("option", {value: c.path, textContent: `${c.name} — ${c.subjects.join(", ")}`}))
+    : [h("option", {value: "", textContent: "(none stored yet)"})]));
 }
 
 $("ca_inspect").onclick = async () => {
@@ -403,6 +1033,7 @@ $("ca_upload").onclick = async () => {
   await loadStoredCAs();
   $("ca_saved").value = d.path;
   $("ca_file").value = ""; $("ca_paste").value = "";
+  saveForm();
   caOut(`stored ${d.name} — ${d.count} certificate(s):\n` +
         d.subjects.map(x => "  - " + x).join("\n"), "var(--ok)");
 };
@@ -412,43 +1043,40 @@ $("ca_delete").onclick = async () => {
   if (!name || !$("ca_saved").value) return;
   await fetch(`/api/ca/${encodeURIComponent(name)}`, { method: "DELETE" });
   await loadStoredCAs();
+  saveForm();
   caOut(`deleted ${name}`, "var(--dim)");
 };
 
 $("tlsdoc").onclick = async () => {
-  const out = $("probe-out");
-  out.style.display = "block"; out.style.color = "var(--fg)";
-  out.textContent = "inspecting the certificate chain…";
+  const bad = checkFields(["url", "headers"]);
+  if (bad.length) return blocked("tls-out", bad.length);
+  showOut("tls-out", "", "Inspecting the certificate chain…");
   try {
     const r = await fetch("/api/tls-check", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ target: targetSpec() }),
     });
     const d = await r.json();
+    if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : "HTTP " + r.status);
     const c = d.certificate || {};
-    out.textContent = [
-      `verdict: ${d.verdict}`,
-      c.subject ? `\ncertificate : ${c.subject}\nissued by   : ${c.issuer}` +
-                  `\nexpires     : ${c.not_after || "?"}` +
-                  (c.sans?.length ? `\nvalid for   : ${c.sans.join(", ")}` : "") : "",
-      (d.stores || []).length ? "\ntrust stores:" : "",
-      ...(d.stores || []).map(s => `  ${s.accepts ? "OK    " : "reject"}  ${s.store}` +
-                                   (s.accepts ? "" : ` (${s.error})`)),
-      "\nwhat this means:", ...(d.findings || []).map(f => "  - " + f),
-      (d.fixes || []).length ? "\nwhat to do:" : "",
-      ...(d.fixes || []).map(f => "  - " + f),
-    ].filter(Boolean).join("\n");
-    out.style.color = d.verdict === "verifiable" ? "var(--ok)"
-      : d.verdict === "no-handshake" ? "var(--warn)" : "var(--accent)";
-  } catch (e) { out.textContent = "diagnosis failed\n\n" + e.message; out.style.color = "var(--accent)"; }
+    const cert = c.subject ? h("pre", {textContent:
+      `certificate : ${c.subject}\nissued by   : ${c.issuer}\nexpires     : ${c.not_after || "?"}` +
+      (c.sans?.length ? `\nvalid for   : ${c.sans.join(", ")}` : "")}) : null;
+    const list = (title, items) => items?.length
+      ? [h("div", {className: "sub", textContent: title}), h("ul", {}, items.map(t => h("li", {textContent: t})))] : null;
+    showOut("tls-out", d.verdict === "verifiable" ? "ok" : d.verdict === "no-handshake" ? "warn" : "fail",
+      `TLS: ${d.verdict}`, cert,
+      list("Trust stores", (d.stores || []).map(s => `${s.accepts ? "accepts" : "rejects"} — ${s.store}` +
+                                                  (s.accepts ? "" : ` (${s.error})`))),
+      list("What this means", d.findings), list("What to do", d.fixes));
+  } catch (e) { showOut("tls-out", "fail", "TLS diagnosis failed", h("pre", {textContent: e.message})); }
 };
-
-let es = null, currentRun = null;
-let streaming = {};  // session id -> the log line its SSE chunks grow in, until the reply lands
 
 $("form").onsubmit = async ev => {
   ev.preventDefault();
-  $("log").innerHTML = ""; $("results").innerHTML = ""; $("dash").hidden = true; streaming = {};
+  $("form-err").textContent = "";
+  const bad = checkFields(Object.keys(CHECKS));
+  if (bad.length) { $("form-err").textContent = fixFirst(bad.length); return; }
   const s = $("strategy").value;
   let body;
   try {
@@ -476,96 +1104,379 @@ $("form").onsubmit = async ev => {
         early_stop_score: s === "crescendo" ? +$("early_stop_score").value : null,
         probes: s === "smoke" ? lines($("probes").value) : null,
       },
-      objectives: [...document.querySelectorAll(".obj:checked")].map(c => c.value),
+      objectives: objBoxes().filter(c => c.checked).map(c => c.value),
       custom_objectives: parseJSON($("custom_objectives").value, []),
       concurrency: +$("concurrency").value,
       language: $("language").value,
       objective_timeout: $("objective_timeout").value ? +$("objective_timeout").value : null,
       target: targetSpec(),
     };
-  } catch (e) { setStatus("error: " + e.message); return; }
+  } catch (e) { $("form-err").textContent = e.message; return; }
 
+  resetRunView(null);
+  $("banner").hidden = true;
+  showView("run");
+  showPane("conv");
   $("go").disabled = true;
-  const r = await fetch("/api/scans", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
-  });
+  setStatus("starting…");
+  let r;
+  try {
+    r = await fetch("/api/scans", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    });
+  } catch (e) { r = {ok: false, json: async () => ({detail: e.message})}; }
   if (!r.ok) {
-    setStatus("error: " + ((await r.json().catch(() => ({}))).detail || r.status));
+    const detail = (await r.json().catch(() => ({}))).detail || r.status;
+    showBanner("The scan could not start: " + (typeof detail === "string" ? detail : JSON.stringify(detail)));
+    setStatus("idle");
     $("go").disabled = false; return;
   }
-  currentRun = (await r.json()).run_id;
-  $("cancel").hidden = false;
-  listen(currentRun);
+  listen((await r.json()).run_id);
 };
 
-$("cancel").onclick = () => currentRun && fetch(`/api/scans/${currentRun}/cancel`, {method: "POST"});
+// ---------------------------------------------------------------- run view
+const FINAL = s => ["done", "error", "cancelled"].includes(s) || s.startsWith("timed out");
+const RUN_KEY = "redrunner.run", FILTER_KEY = "redrunner.logfilter.v1";
+const LEVELS = ["attack", "reply", "info", "warn", "error", "debug"];
+let es = null, currentRun = null, run = null, ticker = null;
 
-function setStatus(t) { $("status").textContent = t; }
+function setStatus(t) {
+  $("status").textContent = t;
+  $("status").dataset.s = t === "idle" ? "idle" : t === "done" ? "done" : FINAL(t) ? "failed" : "running";
+}
+
+function showPane(name) {
+  ["conv", "raw", "results"].forEach(p => {
+    $("pane-" + p).hidden = p !== name;
+    $("vt-" + p).setAttribute("aria-selected", p === name);
+  });
+}
+["conv", "raw", "results"].forEach(p => { $("vt-" + p).onclick = () => showPane(p); });
+
+function resetRunView(id) {
+  run = {id, logs: [], convs: new Map(), nConv: 0, nRecon: 0, snap: {}, results: null, resultsKey: "",
+         error: null, shownResults: false};
+  $("convs").replaceChildren(); $("log").replaceChildren(); $("results").replaceChildren();
+  $("dash").hidden = true; $("meta").textContent = ""; $("elapsed").textContent = "";
+  $("progress").hidden = true; $("res-badge").hidden = true;
+}
+resetRunView(null);
 
 function listen(runId) {
   es?.close();
+  clearInterval(ticker);
+  currentRun = runId;
+  try { sessionStorage.setItem(RUN_KEY, runId); } catch {}
+  $("cancel").hidden = true;
   es = new EventSource(`/api/scans/${runId}/events`);
+  // The server replays a run from its first event on every connection, including the
+  // browser's own reconnects, so each (re)connect starts from an empty view.
+  es.onopen = () => {
+    resetRunView(runId);
+    if ($("banner").dataset.kind === "conn") $("banner").hidden = true;
+  };
   es.onmessage = e => {
     const d = JSON.parse(e.data);
-    if (d.type === "log") addLog(d);
-    else if (d.type === "status") {
-      setStatus(d.status);
-      $("meta").textContent = [d.target_id && "target " + d.target_id,
-                               d.scan_id && "scan " + d.scan_id].filter(Boolean).join("  ·  ");
-      if (d.dashboard_link) { $("dash").href = d.dashboard_link; $("dash").hidden = false; }
-      if (d.results) renderResults(d.results);
-      if (d.error) addLog({level: "error", message: d.error});
-    } else if (d.type === "end") {
-      es.close(); $("go").disabled = false; $("cancel").hidden = true;
-    }
+    if (d.type === "log") onLog(d);
+    else if (d.type === "status") onStatus(d);
+    else if (d.type === "end") { es.close(); finish(); }
   };
-  es.onerror = () => { es.close(); $("go").disabled = false; $("cancel").hidden = true; };
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      finish();
+      showBanner("Lost the connection to this run's live updates. The scan may still be running on the server — pick it from Recent runs to reattach.", "conn");
+    } else showBanner("The connection to this run dropped — reconnecting…", "conn");
+  };
+  ticker = setInterval(tickElapsed, 1000);
+  refreshHistory();
 }
 
-function addLog(d) {
-  const log = $("log"), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+function finish() {
+  clearInterval(ticker);
+  tickElapsed();
+  $("go").disabled = false;
+  $("cancel").hidden = true;
+  refreshHistory();
+}
+
+$("cancel").onclick = () => currentRun && fetch(`/api/scans/${currentRun}/cancel`, {method: "POST"});
+
+const nearBottom = el => el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+const keepBottom = (el, f) => { const stick = nearBottom(el); f(); if (stick) el.scrollTop = el.scrollHeight; };
+const fieldText = fields => Object.entries(fields || {})
+  .map(([k, v]) => `${k} ${v !== null && typeof v === "object" ? JSON.stringify(v) : v}`);
+
+function onLog(d) {
+  run.logs.push(d);
+  keepBottom($("pane-conv"), () => convEntry(d));
+  if (d.level !== "chunk" && rawShown(d)) keepBottom($("pane-raw"), () => $("log").append(rawLine(d)));
+  updateProgress();
+}
+
+// ---- conversations: one card per session, attacks and replies as they happen
+function conv(sid) {
+  let c = run.convs.get(sid);
+  if (c) return c;
+  const recon = sid.startsWith("recon");
+  const title = recon ? `Recon ${++run.nRecon}` : `Conversation ${++run.nConv}`;
+  const state = h("span", {className: "pill run", textContent: "open"});
+  const sum = h("span", {className: "sum", textContent: "0 turns"});
+  const turns = h("div", {className: "turns"});
+  const el = h("details", {className: "conv", open: true},
+    h("summary", {}, h("b", {textContent: title}), sum, state), turns);
+  el.dataset.sid = sid;
+  $("convs").append(el);
+  c = {el, state, sum, turns, n: 0, streaming: null, status: "open"};
+  run.convs.set(sid, c);
+  return c;
+}
+const CONV_PILL = {open: "run", streaming: "run", closed: "pass", error: "fail", timeout: "err"};
+function convState(c, status) {
+  c.status = status;
+  c.state.textContent = status;
+  c.state.className = "pill " + CONV_PILL[status];
+}
+const bubble = (kind, text) => h("div", {className: "bubble " + kind},
+  h("span", {className: "who", textContent: kind === "attack" ? "Red attack" : "Target reply"}),
+  h("span", {className: "text", textContent: text}));
+
+function convEntry(d) {
   const sid = d.fields?.session_id;
-  if (d.level === "chunk") {  // SSE text grows in one line per session as it streams
-    (streaming[sid] ??= logLine("stream", "")).lastChild.textContent += d.message;
-  } else {
-    const f = d.fields ? ` <span class="fields">${escape_(JSON.stringify(d.fields))}</span>` : "";
-    logLine(d.level, escape_(d.message) + f, d.level === "reply" && streaming[sid]);
-    delete streaming[sid];
+  if (!sid) {
+    if (d.level !== "debug" && d.level !== "chunk")
+      $("convs").append(h("div", {className: "sysline " + d.level, textContent: [d.message, ...fieldText(d.fields)].join(" · ")}));
+    return;
   }
-  if (stick) log.scrollTop = log.scrollHeight;
+  const c = conv(sid);
+  if (d.level === "attack") { c.turns.append(bubble("attack", d.message)); c.n++; }
+  else if (d.level === "chunk") {  // a streamed reply grows in place until the full reply lands
+    if (!c.streaming) {
+      c.streaming = bubble("reply", "");
+      c.streaming.classList.add("streaming");
+      c.turns.append(c.streaming);
+      convState(c, "streaming");
+    }
+    c.streaming.querySelector(".text").textContent += d.message;
+  } else if (d.level === "reply") {
+    const b = bubble("reply", d.message);
+    if (c.streaming) c.streaming.replaceWith(b); else c.turns.append(b);
+    c.streaming = null;
+    convState(c, "open");
+  } else if (d.level === "warn" || d.level === "error") {
+    c.turns.append(h("div", {className: "note " + d.level, textContent: d.message}));
+    if (/timed out/i.test(d.message)) convState(c, "timeout");
+    else if (d.level === "error") convState(c, "error");
+  } else if (d.message === "session closed" && ["open", "streaming"].includes(c.status)) convState(c, "closed");
+  c.sum.textContent = `${c.n} turn${c.n === 1 ? "" : "s"}`;
 }
 
-function logLine(level, html, replacing) {  // the full reply takes its streamed line's place
-  const el = document.createElement("div");
-  el.className = "l " + level;
-  el.innerHTML = `<span class="lv">${level}</span><span class="msg">${html}</span>`;
-  if (replacing) replacing.replaceWith(el); else $("log").appendChild(el);
-  return el;
-}
-const escape_ = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// ---- raw log with level filters
+const rawLevels = new Set(store.get(FILTER_KEY, ["attack", "reply", "info", "warn", "error"]));
+const NOISE = "noise";  // the session opened / closed bookkeeping lines
+const rawShown = d => rawLevels.has(d.level) && !(!rawLevels.has(NOISE) && /^session (opened|closed)$/.test(d.message));
+const rawLine = d => h("div", {className: "l " + d.level},
+  h("span", {className: "lv", textContent: d.level}),
+  h("span", {className: "msg"}, d.message, fieldText(d.fields).length ? " " : "",
+    fieldText(d.fields).map(t => h("span", {className: "tag", textContent: t}))));
+if (!store.get(FILTER_KEY, null)) rawLevels.add(NOISE);
+$("filters").replaceChildren(...[...LEVELS, NOISE].map(level => {
+  const box = h("input", {type: "checkbox", checked: rawLevels.has(level)});
+  box.dataset.level = level;
+  box.onchange = () => {
+    box.checked ? rawLevels.add(level) : rawLevels.delete(level);
+    store.set(FILTER_KEY, [...rawLevels]);
+    $("log").replaceChildren(...run.logs.filter(d => d.level !== "chunk" && rawShown(d)).map(rawLine));
+  };
+  return h("label", {className: "chip"}, box, level === NOISE ? "session open/close" : level);
+}));
 
-function renderResults(res) {
-  const rows = res.results || [];
-  if (!rows.length) { $("results").innerHTML = "<p class='hint'>No result entries.</p>"; return; }
+// ---- progress and status
+function updateProgress() {
+  const convs = [...run.convs.values()];
+  const count = level => run.logs.filter(d => d.level === level).length;
+  const timeouts = convs.filter(c => c.status === "timeout").length;
+  const open = convs.filter(c => ["open", "streaming"].includes(c.status)).length;
+  const item = (n, label) => h("span", {}, h("b", {textContent: n}), ` ${label}`);
+  $("progress").replaceChildren(
+    item(convs.length, `conversation${convs.length === 1 ? "" : "s"}` + (open ? ` (${open} open)` : "")),
+    item(count("attack"), "attacks"), item(count("reply"), "replies"),
+    item(count("error"), "errors"), item(timeouts, "timeouts"));
+  $("progress").hidden = false;
+}
+
+function tickElapsed() {
+  if (!run?.snap.started) return;
+  const end = FINAL(run.snap.status || "") ? (run.logs.at(-1)?.t ?? Date.now() / 1000) : Date.now() / 1000;
+  const sec = Math.max(0, Math.round(end - run.snap.started));
+  $("elapsed").textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+}
+
+function onStatus(d) {
+  run.snap = d;
+  setStatus(d.status);
+  $("meta").textContent = [d.name, d.target_id && "target " + d.target_id, d.scan_id && "scan " + d.scan_id]
+    .filter(Boolean).join(" · ");
+  $("meta").title = d.target || "";
+  if (d.dashboard_link) { $("dash").href = d.dashboard_link; $("dash").hidden = false; }
+  const final = FINAL(d.status);
+  $("go").disabled = !final;
+  $("cancel").hidden = final;
+  if (d.results) {
+    const key = JSON.stringify(d.results);
+    if (key !== run.resultsKey) { run.resultsKey = key; run.results = d.results; renderResults(); }
+  }
+  if (d.error && d.error !== run.error) {
+    run.error = d.error;
+    onLog({level: "error", message: d.error, t: Date.now() / 1000});
+    showBanner("The scan failed: " + d.error, "run");
+  }
+  if (final && run.results && !run.shownResults) { run.shownResults = true; showPane("results"); }
+  tickElapsed();
+}
+
+// ---- run history and reattach
+async function refreshHistory() {
+  let list = [];
+  try { list = await (await fetch("/api/scans")).json(); } catch {}
+  const time = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  $("history").replaceChildren(
+    h("option", {value: "", textContent: list.length ? `Recent runs (${list.length})` : "No runs yet"}),
+    ...list.map(r => h("option", {value: r.id, title: r.target || "",
+      textContent: `${time(r.started)} · ${r.name || "scan"} · ${r.status}`})));
+  $("history").value = list.some(r => r.id === currentRun) ? currentRun : "";
+}
+$("history").onchange = () => {
+  const id = $("history").value;
+  if (!id || id === currentRun) return;
+  $("banner").hidden = true;
+  showPane("conv");
+  listen(id);
+};
+
+(async () => {
+  let id = null;
+  try { id = sessionStorage.getItem(RUN_KEY); } catch {}
+  if (id && (await fetch(`/api/scans/${id}`).catch(() => ({ok: false}))).ok) listen(id);
+  else {
+    try { sessionStorage.removeItem(RUN_KEY); } catch {}
+    refreshHistory();
+  }
+})();
+
+// ---------------------------------------------------------------- results
+const verdictOf = r => r.error && /timed out/i.test(r.error) ? "timeout" : r.error ? "error"
+  : r.isSuccessful ? "malicious" : r.evaluation?.attackSuccessScore == null ? "unscored" : "safe";
+const VERDICT_PILL = {malicious: "fail", safe: "pass", error: "err", timeout: "err", unscored: "err"};
+const VERDICT_RANK = {malicious: 0, error: 1, timeout: 1, unscored: 2, safe: 3};
+const RESULT_FILTERS = {all: () => true, malicious: v => v === "malicious", safe: v => v === "safe",
+                        problems: v => !["malicious", "safe"].includes(v)};
+let resFilter = "all", resSort = {key: "verdict", dir: 1};
+
+function overall(rows) {
   // Fail closed: safe only when every objective was scored and none got through.
-  const broken = rows.filter(r => r.isSuccessful).length;
-  const unsure = rows.filter(r => r.error || r.evaluation?.attackSuccessScore == null).length;
+  const broken = rows.filter(r => verdictOf(r) === "malicious").length;
+  const unsure = rows.filter(r => ["error", "timeout", "unscored"].includes(verdictOf(r))).length;
   const [cls, word] = broken ? ["fail", "malicious"] : unsure ? ["err", "inconclusive"] : ["pass", "safe"];
-  $("results").innerHTML = `<p>Lakera Red verdict: <span class="pill ${cls}">${word}</span>
-    <span class="hint">${broken} of ${rows.length} objective(s) broken` +
-    (unsure ? `, ${unsure} errored or unscored` : "") + `</span></p>` +
-    `<table><thead><tr><th>Objective</th><th>Verdict</th><th>Score</th>
-    <th>Explanation</th></tr></thead><tbody>` + rows.map(r => {
-      const e = r.evaluation || {};
-      const timedOut = r.error && /timed out/i.test(r.error);
-      const pill = timedOut ? `<span class="pill err" title="target did not respond in time">timeout</span>`
-        : r.error ? `<span class="pill err">error</span>`
-        : r.isSuccessful ? `<span class="pill fail" title="attack succeeded">malicious</span>`
-        : `<span class="pill pass" title="attack held">safe</span>`;
-      return `<tr><td>${escape_(r.objectiveId)}</td><td>${pill}</td>
-        <td>${e.attackSuccessScore ?? "–"}</td>
-        <td>${escape_(r.error || e.explanation || "")}</td></tr>`;
-    }).join("") + "</tbody></table>";
+  return {broken, unsure, held: rows.length - broken - unsure, cls, word};
+}
+
+function sortedRows(rows) {
+  const val = {objective: r => r.objectiveId || "", verdict: r => VERDICT_RANK[verdictOf(r)],
+               score: r => r.evaluation?.attackSuccessScore ?? -1}[resSort.key];
+  return rows.filter(r => RESULT_FILTERS[resFilter](verdictOf(r))).sort((a, b) => {
+    const x = val(a), y = val(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * resSort.dir || (b.evaluation?.attackSuccessScore ?? -1) - (a.evaluation?.attackSuccessScore ?? -1);
+  });
+}
+
+function renderResults() {
+  const rows = run.results?.results || [];
+  $("res-badge").textContent = rows.length;
+  $("res-badge").hidden = !rows.length;
+  if (!rows.length) {
+    $("results").replaceChildren(h("p", {className: "hint",
+      textContent: run.results?.ready === false ? "Results are not ready yet." : "No result entries."}));
+    return;
+  }
+  const o = overall(rows);
+  const stat = (label, value) => h("div", {className: "stat"}, h("span", {textContent: label}), value);
+  const summary = h("div", {className: "summary"},
+    stat("Lakera Red verdict", h("span", {className: "pill " + o.cls, textContent: o.word})),
+    stat("Broken", h("b", {textContent: o.broken})), stat("Held", h("b", {textContent: o.held})),
+    stat("Errored / unscored", h("b", {textContent: o.unsure})), stat("Objectives", h("b", {textContent: rows.length})));
+
+  const filters = h("div", {className: "chips"}, Object.keys(RESULT_FILTERS).map(f => {
+    const radio = h("input", {type: "radio", name: "resfilter", value: f, checked: f === resFilter});
+    radio.onchange = () => { resFilter = f; renderResults(); };
+    return h("label", {className: "chip"}, radio, f === "problems" ? "errors" : f);
+  }));
+  filters.setAttribute("role", "radiogroup");
+  filters.setAttribute("aria-label", "Show results");
+  const exportBtn = (kind, label) => h("button", {type: "button", className: "ghost small", textContent: label,
+                                                   onclick: () => downloadExport(kind)});
+  const toolbar = h("div", {className: "toolbar"}, filters, h("span", {className: "spacer"}),
+    exportBtn("json", "Export JSON"), exportBtn("csv", "CSV"), exportBtn("md", "Report (.md)"));
+
+  const head = (key, label) => {
+    const th = h("th", {}, key ? h("button", {type: "button", textContent: label, onclick: () => {
+      resSort = {key, dir: resSort.key === key ? -resSort.dir : 1}; renderResults();
+    }}) : label);
+    if (key) th.setAttribute("aria-sort", resSort.key === key ? (resSort.dir > 0 ? "ascending" : "descending") : "none");
+    return th;
+  };
+  const body = h("tbody", {}, sortedRows(rows).flatMap(r => {
+    const e = r.evaluation || {}, v = verdictOf(r), text = r.error || e.explanation || "";
+    const row = h("tr", {className: "res-row", tabIndex: 0},
+      h("td", {className: "objective", textContent: r.objectiveId}),
+      h("td", {}, h("span", {className: "pill " + VERDICT_PILL[v], textContent: v})),
+      h("td", {textContent: e.attackSuccessScore ?? "–"}),
+      h("td", {}, h("div", {className: "clamp", textContent: text})));
+    const detail = h("tr", {className: "detail", hidden: true}, h("td", {colSpan: 4},
+      text ? h("p", {textContent: text}) : null,
+      (r.conversation || []).length ? h("div", {className: "turns"}, r.conversation.map(m =>
+        h("div", {className: "bubble " + (m.role === "user" ? "attack" : "reply")},
+          h("span", {className: "who", textContent: m.role}), h("span", {className: "text", textContent: m.content})))) : null));
+    row.setAttribute("aria-expanded", "false");
+    const toggle = () => { detail.hidden = !detail.hidden; row.setAttribute("aria-expanded", !detail.hidden); };
+    row.onclick = toggle;
+    row.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); } };
+    return [row, detail];
+  }));
+  const table = h("table", {}, h("thead", {}, h("tr", {}, head("objective", "Objective"), head("verdict", "Verdict"),
+    head("score", "Score"), head(null, "Explanation"))), body);
+  $("results").replaceChildren(summary, toolbar, table,
+    ...(body.children.length ? [] : [h("p", {className: "hint", textContent: "No result matches this filter."})]));
+}
+
+// ---- export: built from the results already in the page, no server round trip
+const csvCell = v => {
+  let s = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;  // keep spreadsheet apps from running it as a formula
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const mdCell = v => String(v ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+function exportText(kind) {
+  const rows = run.results?.results || [], o = overall(rows), snap = run.snap;
+  const meta = {run_id: run.id, scan_name: snap.name, target: snap.target, status: snap.status,
+                scan_id: snap.scan_id, target_id: snap.target_id, dashboard: snap.dashboard_link};
+  if (kind === "json") return JSON.stringify({...meta, verdict: o.word, results: run.results}, null, 2);
+  if (kind === "csv") return [["objective", "verdict", "score", "explanation"],
+    ...rows.map(r => [r.objectiveId, verdictOf(r), r.evaluation?.attackSuccessScore ?? "", r.error || r.evaluation?.explanation || ""])]
+    .map(cols => cols.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  return [`# Lakera Red scan report — ${mdCell(snap.name || "scan")}`, "",
+    `- **Verdict:** ${o.word} (${o.broken} of ${rows.length} objective(s) broken${o.unsure ? `, ${o.unsure} errored or unscored` : ""})`,
+    `- **Target:** ${mdCell(snap.target)}`, `- **Status:** ${mdCell(snap.status)}`,
+    snap.scan_id ? `- **Scan:** ${mdCell(snap.scan_id)}` : "", snap.dashboard_link ? `- **Dashboard:** ${snap.dashboard_link}` : "",
+    "", "| Objective | Verdict | Score | Explanation |", "|---|---|---|---|",
+    ...rows.map(r => `| ${mdCell(r.objectiveId)} | ${verdictOf(r)} | ${r.evaluation?.attackSuccessScore ?? "–"} | ${mdCell(r.error || r.evaluation?.explanation)} |`),
+    ""].filter((line, i, all) => line !== "" || all[i - 1] !== "").join("\n");
+}
+function downloadExport(kind) {
+  const type = {json: "application/json", csv: "text/csv", md: "text/markdown"}[kind];
+  const url = URL.createObjectURL(new Blob([exportText(kind)], {type}));
+  const name = (run.snap.name || "scan").replace(/[^\w.-]+/g, "-");
+  h("a", {href: url, download: `red-${name}-${run.snap.scan_id || run.id}.${kind}`}).click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 </script>
 </body>

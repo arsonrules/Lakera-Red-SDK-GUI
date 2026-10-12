@@ -19,6 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -221,6 +222,8 @@ def _jsonable(value: Any) -> Any:
 class Run:
     id: str
     status: str = "starting"
+    name: str = ""
+    target: str = ""      # the target URL as shown in the run history: no credentials or query
     logs: list[dict[str, Any]] = field(default_factory=list)
     scan_id: str | None = None
     target_id: str | None = None
@@ -246,6 +249,8 @@ class Run:
         return {
             "id": self.id,
             "status": self.status,
+            "name": self.name,
+            "target": self.target,
             "scan_id": self.scan_id,
             "target_id": self.target_id,
             "dashboard_link": self.dashboard_link,
@@ -257,6 +262,12 @@ class Run:
 
 
 RUNS: dict[str, Run] = {}
+
+
+def _shown_url(url: str) -> str:
+    """scheme://host/path only: userinfo and query strings can carry credentials."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
 
 
 class RunLogger:
@@ -408,7 +419,8 @@ app = FastAPI(title="Lakera Red Runner")
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(HERE / "static" / "index.html")
+    # Revalidate every load, so an updated UI is never served from a stale browser cache.
+    return FileResponse(HERE / "static" / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/objectives")
@@ -528,7 +540,7 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
         req.target.to_config().validate()
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    run = Run(id=uuid.uuid4().hex[:12])
+    run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url))
     RUNS[run.id] = run
     run.log("info", "run queued")
     run.task = asyncio.create_task(_execute(run, req, api_key))

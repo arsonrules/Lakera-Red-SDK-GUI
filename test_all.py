@@ -827,8 +827,16 @@ async def main() -> int:
               any(e["type"] == "log" for e in seen) and seen[-1]["type"] == "end", str(len(seen)))
         check("SSE stream reports the final status",
               any(e.get("type") == "status" and e.get("status") == "done" for e in seen), "")
-        check("run listing includes finished runs",
-              any(r["id"] == run_id for r in (await client.get("/api/scans")).json()))
+        listed = next((r for r in (await client.get("/api/scans")).json() if r["id"] == run_id), {})
+        check("run listing includes finished runs", bool(listed))
+        check("run listing names the scan and its target URL",
+              listed.get("name") == "test scan" and listed.get("target") == http_target["url"].split("?")[0],
+              str({k: listed.get(k) for k in ("name", "target")}))
+        hidden = await client.post("/api/scans", json=base_payload(
+            relay_url, {**http_target, "url": "http://user:pw@127.0.0.1:1/x?key=SECRET"}))
+        snap = (await client.get(f"/api/scans/{hidden.json()['run_id']}")).json()
+        check("run listing drops credentials and query from the target URL",
+              snap.get("target") == "http://127.0.0.1:1/x", str(snap.get("target")))
 
         print("\n[9] SSE targets: message.StreamToken -> /stream/{StreamToken} -> content chunks")
         sse_chat = f"http://127.0.0.1:{HTTP_PORT}/sse-chat"

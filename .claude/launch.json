@@ -14,6 +14,12 @@
       "port": 8091
     },
     {
+      "name": "lakera-red-runner-dev",
+      "runtimeExecutable": "/Users/arson/Documents/workspace/side project/AI Red Teaming SDK DPO/.venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8092", "--reload"],
+      "port": 8092
+    },
+    {
       "name": "demo-servers",
       "runtimeExecutable": "/Users/arson/Documents/workspace/side project/AI Red Teaming SDK DPO/.venv/bin/python",
       "runtimeArgs": ["demo_servers.py"],
