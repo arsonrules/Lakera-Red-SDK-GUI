@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import importlib.metadata
 import json
 import os
 import re
@@ -162,9 +163,9 @@ class ScanRequest(BaseModel):
     custom_objectives: list[CustomObjectiveSpec] = Field(default_factory=list)
     concurrency: int = 3
     language: str = "en"
-    # Optional cap (seconds) on how long each objective waits for the target before it
-    # is marked timed out and the scan moves on. None = wait as before (no per-objective cap).
-    objective_timeout: float | None = None
+    # How long Red waits for each reply before abandoning that objective (SDK 0.10+,
+    # stored on the target). None keeps the target's stored value, or Red's 300 s default.
+    response_timeout_seconds: int | None = Field(None, ge=1, le=480)
     # Target under test
     target: TargetSpec
 
@@ -292,51 +293,37 @@ class RunLogger:
 # --------------------------------------------------------------------------- scan driver
 
 
-def _make_handler(run: Run, cfg: TargetConfig, objective_timeout: float | None = None):
+def _make_handler(run: Run, cfg: TargetConfig):
     """Drive one scan session (one objective).
 
     Each session opens its own transport via open_session -- and each streaming turn
     its own SSE stream inside _stream_reply -- so a fresh stream is used for every
-    objective and closed on completion, error, cancellation or timeout by the context
-    managers, never reused or leaked into the next objective.
-
-    objective_timeout (optional, seconds) bounds how long a single turn waits for the
-    target. On expiry asyncio.wait_for cancels that turn, which unwinds open_session's
-    context managers and closes the turn's SSE stream and any socket; only this
-    objective is finalized as timed out (once -- wait_for yields the reply or the
-    timeout, never both) and the rest of the scan continues. Left unset (None), each
-    turn is awaited directly and behaviour is exactly as before.
+    objective and closed on completion, error or cancellation by the context
+    managers, never reused or leaked into the next objective. When Red stops waiting
+    for a reply (the target's response_timeout_seconds), the SDK cancels this handler,
+    which unwinds the same context managers.
     """
     async def handler(session) -> None:
-        run.log("info", "session opened", session_id=session.id)
+        sid = session.relay_session_id
+        run.log("info", "session opened", session_id=sid)
         try:
             async with open_session(cfg) as chat:
                 async for msg in session:
-                    run.log("attack", msg.attack, session_id=session.id)
+                    run.log("attack", msg.attack, session_id=sid)
                     # ponytail: one log entry per SSE chunk so the UI shows the reply as it
                     # streams; coalesce them if replies grow long enough to bloat the log.
-                    call = chat(msg.attack, on_chunk=lambda text: run.log(
-                        "chunk", text, session_id=session.id))
-                    try:
-                        reply = (await asyncio.wait_for(call, objective_timeout)
-                                 if objective_timeout else await call)
-                    except asyncio.TimeoutError:
-                        # The turn is cancelled and its SSE stream/socket closed by the
-                        # context managers unwinding; mark just this objective, not the scan.
-                        note = (f"objective timed out after {objective_timeout:g}s "
-                                "waiting for the target")
-                        run.log("warn", note, session_id=session.id)
-                        raise RuntimeError(note) from None
-                    run.log("reply", reply, session_id=session.id)
+                    reply = await chat(msg.attack, on_chunk=lambda text: run.log(
+                        "chunk", text, session_id=sid))
+                    run.log("reply", reply, session_id=sid)
                     await msg.respond(reply)
         except Exception as exc:
             # Re-raise with the diagnosis attached so it reaches the objective's
             # error text, not just an opaque OpenSSL string.
             if hint := explain_tls_failure(exc, cfg):
-                run.log("error", hint, session_id=session.id)
+                run.log("error", hint, session_id=sid)
                 raise RuntimeError(f"{exc} — {hint}") from exc
             raise
-        run.log("info", "session closed", session_id=session.id)
+        run.log("info", "session closed", session_id=sid)
 
     return handler
 
@@ -344,7 +331,7 @@ def _make_handler(run: Run, cfg: TargetConfig, objective_timeout: float | None =
 async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
     cfg = req.target.to_config()
     cfg.validate()
-    handler = _make_handler(run, cfg, req.objective_timeout)
+    handler = _make_handler(run, cfg)
     client = LakeraRedClient(
         api_key,
         base_url=req.base_url,
@@ -355,12 +342,16 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
         run.status = "resolving target"
         if req.target_id:
             target = await client.get_target(req.target_id)
+            if req.response_timeout_seconds:
+                target = await client.update_target(
+                    target.target_id, response_timeout_seconds=req.response_timeout_seconds)
             run.log("info", "reusing target", target_id=target.target_id, name=target.name)
         else:
             target = await client.create_or_get_target(
                 req.target_name or "web-service target",
                 app_context=req.app_context.to_recon(),
                 ground_truth=req.ground_truth.to_ground_truth(),
+                response_timeout_seconds=req.response_timeout_seconds,
                 handler=handler,
             )
             run.log("info", "target ready", target_id=target.target_id, name=target.name)
@@ -433,6 +424,7 @@ async def config() -> dict[str, Any]:
     return {
         "base_url": DEFAULT_BASE_URL,
         "has_env_key": bool(os.environ.get("LAKERA_RED_API_KEY")),
+        "sdk_version": importlib.metadata.version("lakera-red-sdk"),
     }
 
 

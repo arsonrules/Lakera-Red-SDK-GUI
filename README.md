@@ -1,7 +1,7 @@
 # Lakera Red Runner
 
-A web UI and small API for running [Check Point AI Red Teaming](https://docs.lakera.ai/docs/red/sdk-quickstart)
-(`lakera-red-sdk`) scans against any chat endpoint. Fill in the target, start a scan,
+A web UI and small API for running [Check Point AI Red Teaming](https://docs.lakera.ai/docs/red/sdk-v0.11.x-quickstart)
+(`lakera-red-sdk` 0.11.x, shown next to the title in the UI) scans against any chat endpoint. Fill in the target, start a scan,
 and watch the attacks and your agent's replies as they happen. When the scan finishes,
 read the verdicts and export them.
 
@@ -187,6 +187,10 @@ form covers all the ways to set it:
 **Ground truth** (the real system prompt and tool definitions) is optional. It makes the
 judge more precise and cuts false positives.
 
+Not supported: the SDK's tool tracing (`intercept_tool`) and the `tool-response-poisoning`
+strategy. Both need the agent's own code to report its tool calls, and this runner only
+reaches the agent over the network.
+
 ## HTTP API
 
 | Endpoint | Purpose |
@@ -236,12 +240,13 @@ EOF
 Keep a stable target name so runs stay comparable. Run a small `static` scan on every
 build, and a deeper `crescendo` scan before a release.
 
-**Per-objective timeout.** Each objective runs over its own SSE stream, opened fresh and
+**Reply timeout.** Each objective runs over its own SSE stream, opened fresh and
 closed when the objective finishes, errors, is cancelled or times out. Set
-`objective_timeout` (seconds) in the request, or the **Per-objective timeout** field, to
-cap how long each objective waits for the target. On expiry the turn is cancelled, the
-objective is marked **timeout**, and the scan moves on. Leave it blank to wait as long as
-needed.
+`response_timeout_seconds` (1–480) in the request, or the **Reply timeout** field, to set
+how long Red waits for each reply. It is the SDK's own setting and is saved on the target,
+so later scans keep it. On expiry Red stops waiting, the SDK cancels that turn, the
+objective is marked **timeout**, and the scan moves on. Leave it blank to keep the
+target's value (Red's default is 300 s).
 
 ## TLS problems
 
@@ -277,7 +282,7 @@ The server suite runs against real local servers and a mock relay. It covers:
   refresh, target failures, and run listing;
 - streaming targets: the StreamToken hand-off, SSE framing edge cases, each failure mode,
   verdicts on the streamed reply, and no token leaking;
-- the per-objective SSE lifecycle and the optional timeout.
+- the per-objective SSE lifecycle and the reply timeout.
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
 phone width, accessibility basics, field checks, the connection test, TLS diagnosis,

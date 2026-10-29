@@ -65,6 +65,9 @@ async function uiTests() {
   // ---- header, shortcuts, themes
   check("header: shows the Red key status", /^Red key: /.test($("hs-key").textContent) && !!$("hs-key").dataset.s,
     $("hs-key").textContent);
+  check("header: shows the installed SDK version", /^SDK v0\.11\.\d+$/.test($("sdkver").textContent), $("sdkver").textContent);
+  check("reply timeout is bounded to Red's 1–480 s", $("response_timeout_seconds").min === "1"
+    && $("response_timeout_seconds").max === "480");
   document.activeElement?.blur();
   document.body.dispatchEvent(new KeyboardEvent("keydown", {key: "/", bubbles: true}));
   check("shortcut: '/' jumps to the objective filter", document.activeElement === $("obj_search") && $("sec-scan").open);

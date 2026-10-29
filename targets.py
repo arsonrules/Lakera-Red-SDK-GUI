@@ -387,10 +387,6 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
     return "".join(parts)
 
 
-class TlsTrustError(Exception):
-    """A certificate that verification rejected, reported with the way out."""
-
-
 def build_ssl_context(cfg: TargetConfig) -> ssl.SSLContext:
     """One trust store for both transports.
 

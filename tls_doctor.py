@@ -14,7 +14,6 @@ import re
 import socket
 import ssl
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse

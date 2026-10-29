@@ -37,6 +37,7 @@
   header { padding:12px 24px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap;
            align-items:center; gap:6px 14px; }
   header h1 { font-size:16px; margin:0; letter-spacing:.02em; }
+  header h1 small { font-size:12px; font-weight:400; opacity:.6; }
   #hstatus { display:flex; gap:4px 14px; flex-wrap:wrap; flex:1; font-size:12px; color:var(--dim); }
   .hs { display:inline-flex; align-items:center; gap:6px; }
   .hs::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--dim); }
@@ -240,7 +241,7 @@
 </head>
 <body data-view="config">
 <header>
-  <h1>Lakera Red Runner</h1>
+  <h1>Lakera Red Runner <small id="sdkver"></small></h1>
   <div id="hstatus">
     <span class="hs" id="hs-key">Red key: checking…</span>
     <span class="hs" id="hs-probe">Target: not tested</span>
@@ -439,11 +440,11 @@
           </select>
         </div>
         <div><label for="concurrency">Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
-        <div><label for="objective_timeout">Per-objective timeout (s)</label>
-          <input type="number" id="objective_timeout" min="1" step="1" placeholder="blank = no cap"></div>
+        <div><label for="response_timeout_seconds">Reply timeout (s, 1–480)</label>
+          <input type="number" id="response_timeout_seconds" min="1" max="480" step="1" placeholder="blank = target's (300)"></div>
       </div>
-      <div class="hint">Optional. Caps how long each objective waits for a reply; on expiry that
-        objective is marked <em>timeout</em> and the scan moves on. Blank keeps the current behaviour.</div>
+      <div class="hint">How long Red waits for each reply; on expiry that objective is marked
+        <em>timeout</em> and the scan moves on. Saved on the target. Blank keeps the target's value.</div>
       <div id="p_static" class="row">
         <div><label for="number_of_probes">Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
       </div>
@@ -832,6 +833,7 @@ $("template").onchange = async () => {
 Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/objectives").then(r => r.json())])
   .then(async ([c, list]) => {
     $("base_url").value = c.base_url;
+    $("sdkver").textContent = "SDK v" + c.sdk_version;
     hasEnvKey = c.has_env_key;
     $("keyhint").textContent = c.has_env_key
       ? "LAKERA_RED_API_KEY found in the server environment — leave blank to use it."
@@ -1108,7 +1110,7 @@ $("form").onsubmit = async ev => {
       custom_objectives: parseJSON($("custom_objectives").value, []),
       concurrency: +$("concurrency").value,
       language: $("language").value,
-      objective_timeout: $("objective_timeout").value ? +$("objective_timeout").value : null,
+      response_timeout_seconds: $("response_timeout_seconds").value ? +$("response_timeout_seconds").value : null,
       target: targetSpec(),
     };
   } catch (e) { $("form-err").textContent = e.message; return; }
@@ -1264,7 +1266,7 @@ function convEntry(d) {
     convState(c, "open");
   } else if (d.level === "warn" || d.level === "error") {
     c.turns.append(h("div", {className: "note " + d.level, textContent: d.message}));
-    if (/timed out/i.test(d.message)) convState(c, "timeout");
+    if (/timed out|deadline passed/i.test(d.message)) convState(c, "timeout");
     else if (d.level === "error") convState(c, "error");
   } else if (d.message === "session closed" && ["open", "streaming"].includes(c.status)) convState(c, "closed");
   c.sum.textContent = `${c.n} turn${c.n === 1 ? "" : "s"}`;

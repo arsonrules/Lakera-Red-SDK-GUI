@@ -26,6 +26,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -268,6 +269,8 @@ class MockRelay:
                 "name": name,
                 "recon": body.get("appContext") or existing.get("recon"),
                 "groundTruth": body.get("groundTruth") or existing.get("groundTruth"),
+                "responseTimeoutSeconds": body.get("responseTimeoutSeconds")
+                or existing.get("responseTimeoutSeconds"),
             }
             return self.targets[tid]
 
@@ -283,7 +286,8 @@ class MockRelay:
             t = self.targets[tid]
             t.update({k: v for k, v in
                       (("name", body.get("name")), ("recon", body.get("appContext")),
-                       ("groundTruth", body.get("groundTruth"))) if v})
+                       ("groundTruth", body.get("groundTruth")),
+                       ("responseTimeoutSeconds", body.get("responseTimeoutSeconds"))) if v})
             return t
 
         @r.post("/relay/targets/{tid}/recon")
@@ -318,9 +322,22 @@ class MockRelay:
             if not queue:
                 return Response(status_code=204)
             head = queue[0]
-            if head.get("gate") and self.pending.get(head["gate"], {}).get("awaiting"):
-                return Response(status_code=204)  # wait for the handler's reply first
-            return queue.pop(0)["message"]
+            gate = self.pending.get(head.get("gate"), {})
+            if gate.get("awaiting"):
+                if time.monotonic() < gate["deadline"]:
+                    return Response(status_code=204)  # wait for the handler's reply first
+                # Like Red: past the reply deadline the objective is recorded as timed out.
+                self.errors.setdefault(head["gate"], []).append(
+                    f"response timed out after {gate['timeout_s']}s")
+                gate["awaiting"] = False
+            message = queue.pop(0)["message"]
+            if "type" not in message:  # an attack: hold the session's next turn until answered
+                timeout_s = self.targets.get(targetId, {}).get("responseTimeoutSeconds") or 300
+                message = {**message, "timeoutMs": timeout_s * 1000}
+                self.pending[message["sessionId"]] = {
+                    "awaiting": True, "timeout_s": timeout_s,
+                    "deadline": time.monotonic() + timeout_s}
+            return message
 
         @r.post("/relay/sessions/{session_id}/response")
         async def submit(session_id: str, request: Request) -> dict[str, bool]:
@@ -493,20 +510,6 @@ async def main() -> int:
     relay = MockRelay()
     relay_app = FastAPI()
     relay_app.include_router(relay.router())
-
-    # Mark a session as awaiting as soon as its attack leaves the relay, so the
-    # next turn is only handed out after the handler answers the previous one.
-    @relay_app.middleware("http")
-    async def gate(request: Request, call_next):
-        response = await call_next(request)
-        if request.url.path == "/relay/messages" and response.status_code == 200:
-            body = b"".join([chunk async for chunk in response.body_iterator])
-            data = json.loads(body)
-            if data.get("sessionId") and not data.get("type"):
-                relay.pending.setdefault(data["sessionId"], {})["awaiting"] = True
-            response = Response(body, response.status_code, dict(response.headers),
-                                response.media_type)
-        return response
 
     ca_key, ca_leaf, ca_root = make_ca_signed(tmp)
     servers = [
@@ -717,6 +720,10 @@ async def main() -> int:
                                                                   api_key=""))
         check("missing Red API key rejected at the boundary", no_key.status_code == 400,
               no_key.text[:200])
+        too_long = await client.post("/api/scans", json=base_payload(
+            relay_url, {"url": SCHEMES["http"][0]}, response_timeout_seconds=481))
+        check("a reply timeout outside Red's 1-480 s range is rejected",
+              too_long.status_code == 422, too_long.text[:200])
 
         http_target = {"url": SCHEMES["http"][0], "response_path": "choices.0.message.content"}
         ws_target = {"url": SCHEMES["ws"][0], "response_path": "reply", "body_template": "{{prompt}}"}
@@ -775,9 +782,12 @@ async def main() -> int:
 
         reuse_id = run["target_id"]
         run2 = await run_scan(client, base_payload(relay_url, http_target, target_id=reuse_id,
-                                                   target_name=""))
+                                                   target_name="", response_timeout_seconds=120))
         check("existing target reused by id", run2["status"] == "done" and run2["target_id"] == reuse_id,
               json.dumps(run2)[:300])
+        check("a reused target gets the new reply timeout",
+              relay.targets[reuse_id].get("responseTimeoutSeconds") == 120,
+              json.dumps(relay.targets[reuse_id])[:200])
 
         run3 = await run_scan(client, base_payload(relay_url, http_target, target_id=reuse_id,
                                                    target_name="", refresh_recon=True))
@@ -808,6 +818,8 @@ async def main() -> int:
               str(len(objectives)))
         cfg = (await client.get("/api/config")).json()
         check("config exposes the default base URL", "lakera" in cfg["base_url"], str(cfg))
+        check("config reports the installed SDK version (0.11.x)",
+              cfg.get("sdk_version", "").startswith("0.11."), str(cfg))
         page = await client.get("/")
         check("UI page served", page.status_code == 200 and "Lakera Red Runner" in page.text,
               str(page.status_code))
@@ -1027,7 +1039,7 @@ async def main() -> int:
         echo.state.sse_total = echo.state.sse_open = 0
         run = await run_scan(client, base_payload(
             relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="multiturn-sse-agent",
-            objectives=["security.system-prompt-extraction.1"], objective_timeout=30))
+            objectives=["security.system-prompt-extraction.1"], response_timeout_seconds=30))
         entries = (run.get("results") or {}).get("results") or []
         conv = (entries[0].get("conversation") if entries else []) or []
         await asyncio.sleep(0.4)
@@ -1039,7 +1051,7 @@ async def main() -> int:
         # A generous timeout on a responsive target must not fire.
         run = await run_scan(client, base_payload(
             relay_url, {"url": sse_chat, "stream_url": sse_url}, target_name="within-timeout-agent",
-            objectives=["security.system-prompt-extraction.1"], objective_timeout=30))
+            objectives=["security.system-prompt-extraction.1"], response_timeout_seconds=30))
         entries = (run.get("results") or {}).get("results") or []
         check("a responsive objective within its timeout is not marked timed out",
               run["status"] == "done" and entries
@@ -1053,12 +1065,15 @@ async def main() -> int:
             objectives=["security.system-prompt-extraction.1"],
             custom_objectives=[{"key": "__hang__", "name": "Hang", "attack_description": "x",
                                 "success_indicators": ["y"]}],
-            objective_timeout=1))
+            response_timeout_seconds=1))
         entries = (run.get("results") or {}).get("results") or []
         by_obj = {e["objectiveId"]: e for e in entries}
         hung, live = by_obj.get("__hang__") or {}, by_obj.get("security.system-prompt-extraction.1") or {}
         check("a hanging objective does not fail the whole scan",
               run["status"] == "done" and len(entries) == 2, json.dumps(run)[:300])
+        check("the reply timeout is stored on the target (SDK response_timeout_seconds)",
+              any(t["name"] == "timeout-agent" and t.get("responseTimeoutSeconds") == 1
+                  for t in relay.targets.values()), json.dumps(list(relay.targets.values()))[-300:])
         check("the non-responsive objective is marked timed out",
               "timed out" in (hung.get("error") or ""), json.dumps(hung)[:200])
         check("a timed-out objective is finalized once (an error, no reply recorded)",
