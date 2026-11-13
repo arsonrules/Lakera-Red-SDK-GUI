@@ -1,0 +1,19 @@
+services:
+  runner:
+    build: .
+    image: lakera-red-runner
+    restart: unless-stopped
+    # Loopback only: anyone who reaches this port can make it send credentialed traffic.
+    ports:
+      - "127.0.0.1:${RUNNER_PORT:-8090}:8090"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ca_store:/data/ca_store   # CA bundles uploaded in the UI survive restarts
+    # Targets on the host are reachable as host.docker.internal (also on Linux).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  ca_store:

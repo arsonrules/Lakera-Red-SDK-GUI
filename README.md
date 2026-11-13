@@ -33,6 +33,19 @@ Open <http://localhost:8090>.
 
 `.env.example` lists the first two.
 
+### Docker Compose
+
+```bash
+cp .env.example .env                   # optional: set LAKERA_RED_API_KEY
+docker compose up -d --build
+```
+
+Open <http://localhost:8090> (set `RUNNER_PORT` to change the host port). The port is
+published on `127.0.0.1` only. Uploaded CA bundles are kept in the `ca_store` volume.
+Inside the container, `localhost` means the container, so reach a target or the demo rig
+running on your machine at `host.docker.internal`, for example
+`http://host.docker.internal:8801/chat`.
+
 ## Try it without a Red API key
 
 A local echo agent and a mock Red relay let you run the whole flow offline:
@@ -270,7 +283,8 @@ RUN=$(curl -sX POST localhost:8090/api/scans -H 'Content-Type: application/json'
 .venv/bin/python - "$RUN" <<'EOF'
 import json, sys, time, urllib.request
 url = f"http://localhost:8090/api/scans/{sys.argv[1]}"
-while (run := json.load(urllib.request.urlopen(url)))["status"] not in ("done", "error", "cancelled"):
+while (run := json.load(urllib.request.urlopen(url)))["status"] not in ("done", "error", "cancelled") \
+        and not run["status"].startswith("timed out"):
     time.sleep(5)
 entries = (run.get("results") or {}).get("results") or []
 json.dump(run.get("results"), open("red-scan-results.json", "w"), indent=2)
@@ -306,8 +320,7 @@ Seeing `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`? Clic
 It names the issuer being presented and says what to do. Once you know which root you
 need, supply it under **CA bundle**, either as a server path or by uploading it. Uploads
 are validated, normalised to PEM (DER is accepted) and stored under `ca_store/`. Set
-`LAKERA_RED_CA_STORE` to store them elsewhere. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-for the full walkthrough.
+`LAKERA_RED_CA_STORE` to store them elsewhere.
 
 ## Tests
 
@@ -345,7 +358,8 @@ const s = document.createElement("script");
 s.src = "http://127.0.0.1:8801/ui_tests.js";  // served by demo_servers.py
 document.head.append(s);
 // after the script loads:
-await uiTests();                 // then reload the page
+await uiTests();
+uiTestsBeforeReload();           // then reload the page and load the script again
 await uiTestsAfterReload();      // checks what the browser remembered
 ```
 
