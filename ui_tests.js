@@ -196,6 +196,30 @@ async function uiTests() {
   check("header: editing the target marks the test as stale", /changed since/.test($("hs-probe").textContent));
   set("response_path", "");
 
+  // ---- Test Red API: its own box, drives the header's key status
+  const redCheck = async () => {
+    $("redcheck").click();
+    await until(() => !$("red-out").hidden && !/Testing/.test($("red-out").textContent));
+    return $("red-out");
+  };
+  const keepBase = $("base_url").value;
+  set("base_url", RELAY); set("api_key", "demo");
+  let red = await redCheck();
+  check("Test Red API passes against a relay that accepts the key",
+    red.classList.contains("ok") && /accepted/.test(red.textContent), red.textContent);
+  check("a passing Red API test shows in the header", /^Red key: accepted/.test($("hs-key").textContent),
+    $("hs-key").textContent);
+  set("api_key", "revoked-red-key");
+  check("editing the key resets the header status", $("hs-key").textContent === "Red key: entered",
+    $("hs-key").textContent);
+  red = await redCheck();
+  check("a rejected key fails the Red API test with HTTP 401",
+    red.classList.contains("fail") && /401/.test(red.textContent), red.textContent);
+  set("api_key", "demo"); set("base_url", "http://127.0.0.1:1");
+  red = await redCheck();
+  check("an unreachable Red API URL fails and says so", /Could not reach/.test(red.textContent), red.textContent);
+  set("api_key", ""); set("base_url", keepBase);
+
   // ---- Diagnose TLS: its own box, leaves the probe result alone
   const probeText = $("probe-out").textContent;
   $("tlsdoc").click();

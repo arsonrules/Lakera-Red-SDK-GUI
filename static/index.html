@@ -287,6 +287,10 @@
       <div class="hint" id="keyhint"></div>
       <label for="base_url">Lakera Red API URL</label>
       <input type="text" id="base_url">
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="ghost" id="redcheck">Test Red API</button>
+      </div>
+      <div id="red-out" class="out" role="status" aria-live="polite" hidden></div>
     </div>
   </details>
 
@@ -606,6 +610,7 @@ function headerStatus(id, state, text) { $(id).dataset.s = state; $(id).textCont
 const keyStatus = () => $("api_key").value.trim() ? headerStatus("hs-key", "ok", "Red key: entered")
   : hasEnvKey ? headerStatus("hs-key", "ok", "Red key: from server env") : headerStatus("hs-key", "warn", "Red key: needed");
 $("api_key").addEventListener("input", keyStatus);
+$("base_url").addEventListener("input", keyStatus);
 
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1084,6 +1089,26 @@ $("probe").onclick = async () => {
            : [h("div", {className: "sub", textContent: "Error"}), h("pre", {textContent: d.error}),
               d.tls_hint ? h("p", {textContent: d.tls_hint}) : null]);
   } catch (e) { showOut("probe-out", "fail", "Connection test failed", h("pre", {textContent: e.message})); }
+};
+
+$("redcheck").onclick = async () => {
+  showOut("red-out", "", "Testing the Red API…");
+  try {
+    const r = await fetch("/api/red-check", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ api_key: $("api_key").value, base_url: $("base_url").value.trim() || undefined }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : d.detail ? JSON.stringify(d.detail) : "HTTP " + r.status);
+    const steps = (d.trace || []).map(s => h("li", {textContent: s}));
+    if (!d.ok && steps.length) steps.push(h("li", {className: "failed", textContent: "failed here"}));
+    headerStatus("hs-key", d.ok ? "ok" : "fail", d.ok ? `Red key: accepted · ${d.ms} ms` : "Red API: test failed");
+    showOut("red-out", d.ok ? "ok" : "fail", `${d.ok ? "Red API OK" : "Red API test failed"} · ${d.ms} ms`,
+      h("p", {textContent: d.message}), steps.length ? h("ol", {className: "steps"}, steps) : null);
+  } catch (e) {
+    headerStatus("hs-key", "fail", "Red API: test failed");
+    showOut("red-out", "fail", "Red API test failed", h("pre", {textContent: e.message}));
+  }
 };
 
 function caBundle() {

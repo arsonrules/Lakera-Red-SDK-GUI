@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from lakera_red_sdk import (
@@ -153,10 +154,22 @@ class CustomObjectiveSpec(BaseModel):
     success_indicators: list[str]
 
 
-class ScanRequest(BaseModel):
-    # Lakera side
+class RedApiSpec(BaseModel):
     api_key: str = ""
     base_url: str = DEFAULT_BASE_URL
+
+    def resolved_key(self) -> str:
+        # Trimmed: a pasted newline would make httpx quote the whole key in its error.
+        key = (self.api_key or os.environ.get("LAKERA_RED_API_KEY", "")).strip()
+        if not key:
+            raise HTTPException(400, "No Red API key: pass api_key or set LAKERA_RED_API_KEY")
+        if any(c.isspace() or not c.isprintable() for c in key):
+            raise HTTPException(400, "The Red API key contains a space or control character")
+        return key
+
+
+class ScanRequest(RedApiSpec):
+    # Lakera side: api_key and base_url come from RedApiSpec
     scan_name: str = "web-service scan"
     target_name: str = ""
     target_id: str = ""            # set to reuse an existing target by id
@@ -186,13 +199,6 @@ class ScanRequest(BaseModel):
                 and self.target.system_prompt:
             gt = gt.model_copy(update={"system_prompt": self.target.system_prompt})
         return gt.to_ground_truth()
-
-    def resolved_key(self) -> str:
-        # Trimmed: a pasted newline would make httpx quote the whole key in its error.
-        key = (self.api_key or os.environ.get("LAKERA_RED_API_KEY", "")).strip()
-        if not key:
-            raise HTTPException(400, "No Red API key: pass api_key or set LAKERA_RED_API_KEY")
-        return key
 
 
 class CaPathRequest(BaseModel):
@@ -485,6 +491,45 @@ async def config() -> dict[str, Any]:
         "has_env_key": bool(os.environ.get("LAKERA_RED_API_KEY")),
         "sdk_version": importlib.metadata.version("lakera-red-sdk"),
     }
+
+
+@app.post("/api/red-check")
+async def red_check(req: RedApiSpec) -> dict[str, Any]:
+    """Check the Red API URL is reachable and accepts the key, without creating anything.
+
+    Asks for a target id that cannot exist. Red answers 401 to a bad key, so any 403/404
+    means the key got through; the same request without a key must then get a 401, which
+    tells the Red API apart from some other server at that URL. One try, short timeout,
+    and httpx's default trust -- the same the SDK uses, so a scan would see the same."""
+    key = req.resolved_key()
+    base = req.base_url.strip().rstrip("/")
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise HTTPException(400, "Lakera Red API URL must be an http:// or https:// URL")
+    url = f"{base}/relay/targets/connectivity-check-{uuid.uuid4().hex[:12]}"
+    trace: list[str] = []
+    started = time.monotonic()
+
+    def result(ok: bool, message: str) -> dict[str, Any]:
+        return {"ok": ok, "message": message, "trace": trace,
+                "ms": int((time.monotonic() - started) * 1000)}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            keyed = await http.get(url, headers={"Authorization": f"Bearer {key}"})
+            trace.append(f"GET {base}/relay/targets/… with key → HTTP {keyed.status_code}")
+            if keyed.status_code == 401:
+                return result(False, "Red rejected the API key (HTTP 401)")
+            if keyed.status_code not in (403, 404) and not keyed.is_success:
+                return result(False, f"Unexpected answer from the Red API: HTTP {keyed.status_code}")
+            bare = await http.get(url)
+            trace.append(f"same request without a key → HTTP {bare.status_code}")
+    except httpx.HTTPError as exc:
+        return result(False, f"Could not reach {base}: {type(exc).__name__}: {exc}")
+    if bare.status_code != 401:
+        return result(False, f"{base} answered, but it does not look like the Red API "
+                             f"(it did not ask for a key: HTTP {bare.status_code})")
+    return result(True, "Red API reachable and the API key was accepted")
 
 
 @app.post("/api/probe")
