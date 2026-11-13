@@ -67,7 +67,9 @@ tabs. On a wide screen they sit side by side.
 **Configure** is a set of collapsible sections. Each collapsed header shows a one-line
 summary, such as `wss · apiai.example.com · bearer token`:
 
-- **Red API:** the key and the API URL.
+- **Red API:** the key and the API URL. **Test Red API** checks that the URL is the Red
+  API and that it accepts the key, without creating anything. The header's key status
+  shows the result until you edit either field.
 - **Connection:** URL and authentication.
 - **Request:** HTTP method, body template and extra headers. Ignored fields are hidden
   for ws targets.
@@ -253,6 +255,7 @@ reaches the agent over the network.
 
 | Endpoint | Purpose |
 |---|---|
+| `POST /api/red-check` | Check the Red API URL and key. `{"api_key":…, "base_url":…}`, both optional (the key falls back to `LAKERA_RED_API_KEY`). Returns `ok`, a `message` and the requests made |
 | `POST /api/probe` | Send one message to the target. Connectivity and auth check. For an SSE target the reply is the joined stream, and `chunks` counts its pieces |
 | `POST /api/scans` | Start a scan. Returns `{"run_id": …}` |
 | `GET /api/scans` | List runs from this server session, newest first, with name and target URL |
@@ -330,6 +333,8 @@ are validated, normalised to PEM (DER is accepted) and stored under `ca_store/`.
 
 The server suite runs against real local servers and a mock relay. It covers:
 
+- the Red API check: key accepted, key rejected, unreachable, not the Red API, and bad
+  input refused without echoing the key;
 - all transport and auth combinations, and certificate trust (self-signed, private CA,
   supplied bundle, wrong bundle, missing bundle, and https and wss agreeing on the verdict);
 - CA bundle handling: directories, mixed PEM and DER, uploads, path containment, and
@@ -348,7 +353,7 @@ The server suite runs against real local servers and a mock relay. It covers:
   and its use as ground truth, single-turn requests, and crescendo refused.
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
-phone width, accessibility basics, field checks, the connection test, TLS diagnosis,
+phone width, accessibility basics, field checks, the Red API test, the connection test, TLS diagnosis,
 saved configs and templates, the objective picker, runs, results, export, history and
 reattach, and the theme. It needs `demo_servers.py` running. Serve the file, load the
 page, and run this in the browser console:

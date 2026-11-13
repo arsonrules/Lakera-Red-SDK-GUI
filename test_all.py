@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -42,6 +43,7 @@ from tls_doctor import read_ca_pems
 
 HTTP_PORT, TLS_PORT, RELAY_PORT, CA_PORT = 8801, 8802, 8803, 8804
 BEARER, API_KEY, USER, PASSWORD = "tok-bearer-123", "key-abc-789", "alice", "s3cr3t"
+BAD_RED_KEY = "revoked-red-key"
 
 PASSED: list[str] = []
 FAILED: list[tuple[str, str]] = []
@@ -321,7 +323,9 @@ class MockRelay:
             return self.targets[tid]
 
         @r.get("/relay/targets/{tid}")
-        async def get_target(tid: str) -> Any:
+        async def get_target(tid: str, request: Request) -> Any:
+            if request.headers.get("authorization", "") in ("", f"Bearer {BAD_RED_KEY}"):
+                return Response('{"error":"Unauthorized"}', 401, media_type="application/json")
             if tid not in self.targets:
                 return Response('{"error":"not found"}', 404, media_type="application/json")
             return self.targets[tid]
@@ -945,6 +949,49 @@ async def main() -> int:
         snap = (await client.get(f"/api/scans/{hidden.json()['run_id']}")).json()
         check("run listing drops credentials and query from the target URL",
               snap.get("target") == "http://127.0.0.1:1/x", str(snap.get("target")))
+
+        print("\n[8b] Red API connectivity check")
+        async def red_check(**body: Any) -> httpx.Response:
+            return await client.post("/api/red-check", json=body, timeout=30)
+
+        targets_before = set(relay.targets)
+        good = (await red_check(api_key="test-key", base_url=relay_url + "/")).json()
+        check("a reachable Red API that accepts the key passes",
+              good.get("ok") is True and "accepted" in good.get("message", "")
+              and len(good.get("trace", [])) == 2, json.dumps(good)[:220])
+        check("the check creates no target", set(relay.targets) == targets_before,
+              str(set(relay.targets) - targets_before))
+        bad = (await red_check(api_key=BAD_RED_KEY, base_url=relay_url)).json()
+        check("a rejected key fails with HTTP 401",
+              bad.get("ok") is False and "401" in bad.get("message", ""), json.dumps(bad)[:220])
+        down = (await red_check(api_key="test-key", base_url="http://127.0.0.1:9")).json()
+        check("an unreachable URL fails and says it could not reach it",
+              down.get("ok") is False and "Could not reach" in down.get("message", ""),
+              json.dumps(down)[:220])
+        other = (await red_check(api_key="test-key", base_url=f"http://127.0.0.1:{HTTP_PORT}")).json()
+        check("a server that is not the Red API is called out",
+              other.get("ok") is False and "does not look like the Red API" in other.get("message", ""),
+              json.dumps(other)[:220])
+        env_key = os.environ.pop("LAKERA_RED_API_KEY", None)
+        try:
+            no_key = await red_check(api_key="", base_url=relay_url)
+        finally:
+            if env_key is not None:
+                os.environ["LAKERA_RED_API_KEY"] = env_key
+        check("no key at all is refused with 400", no_key.status_code == 400, no_key.text[:200])
+        scheme = await red_check(api_key="test-key", base_url="ftp://red.example")
+        check("a non-http(s) Red API URL is refused with 400", scheme.status_code == 400, scheme.text[:200])
+        spaced = await red_check(api_key="abc SECRETPART", base_url=relay_url)
+        check("a key with a space is refused without echoing it",
+              spaced.status_code == 400 and "SECRETPART" not in spaced.text, spaced.text[:200])
+        if env_key is None:
+            os.environ["LAKERA_RED_API_KEY"] = "env-test-key"
+            try:
+                via_env = (await red_check(base_url=relay_url)).json()
+            finally:
+                del os.environ["LAKERA_RED_API_KEY"]
+            check("a blank key falls back to LAKERA_RED_API_KEY", via_env.get("ok") is True,
+                  json.dumps(via_env)[:220])
 
         print("\n[9] SSE targets: message.StreamToken -> /stream/{StreamToken} -> content chunks")
         sse_chat = f"http://127.0.0.1:{HTTP_PORT}/sse-chat"
