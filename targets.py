@@ -5,6 +5,10 @@ An http(s) target may also stream its answer: it replies with
 message.StreamToken, and the text arrives from a separate SSE endpoint opened
 with that token as the last segment of its URL: /path/to/{StreamToken}.
 
+A "model" target is a model API (a self-trained model behind vLLM, TGI, Ollama or
+an in-house server): the model name and system prompt are filled into a preset or
+custom request body, and every attack is a fresh single-turn request.
+
 TLS verification is opt-in (default off) so self-signed / corporate-MITM'd
 endpoints work out of the box -- this is a red-teaming tool pointed at systems
 the operator owns, not a general-purpose client.
@@ -31,6 +35,17 @@ import websockets
 from tls_doctor import read_ca_pems
 
 AuthType = Literal["none", "bearer", "basic", "api_key"]
+TargetKind = Literal["endpoint", "model"]
+ModelFormat = Literal["openai", "completion", "custom"]
+
+# Request body and reply path per model API format; "custom" uses the operator's own.
+MODEL_FORMATS = {
+    # OpenAI-compatible chat: vLLM, TGI /v1, Ollama /v1, LM Studio, LiteLLM.
+    "openai": ('{"model": "{{model}}", "messages": {{messages}}}', "choices.0.message.content"),
+    # TGI /generate: one text input; the system prompt is prepended to it.
+    "completion": ('{"inputs": "{{prompt}}", "parameters": {"max_new_tokens": 512}}',
+                   "generated_text"),
+}
 
 DEFAULT_HTTP_BODY = '{"message": "{{prompt}}"}'
 DEFAULT_WS_BODY = "{{prompt}}"
@@ -63,14 +78,38 @@ class TargetConfig:
     verify_tls: bool = False
     ca_bundle: str = ""     # PEM file or directory of CAs to trust (implies verify_tls)
     timeout: float = 60.0
+    kind: TargetKind = "endpoint"
+    api_format: ModelFormat = "openai"   # model targets only
+    model: str = ""                      # model targets: the served model name
+    system_prompt: str = ""              # model targets: sent ahead of every attack
 
     @property
     def scheme(self) -> str:
         return urlparse(self.url).scheme.lower()
 
+    @property
+    def template(self) -> str:
+        if self.kind == "model" and self.api_format in MODEL_FORMATS:
+            return MODEL_FORMATS[self.api_format][0]
+        return self.body_template or (DEFAULT_HTTP_BODY if self.scheme in ("http", "https")
+                                      else DEFAULT_WS_BODY)
+
+    @property
+    def reply_path(self) -> str:
+        if self.kind == "model" and self.api_format in MODEL_FORMATS:
+            return self.response_path or MODEL_FORMATS[self.api_format][1]
+        return self.response_path
+
     def validate(self) -> None:
         if self.scheme not in ("http", "https", "ws", "wss"):
             raise ValueError(f"unsupported scheme {self.scheme!r}: use http, https, ws or wss")
+        if self.kind == "model":
+            if self.scheme not in ("http", "https"):
+                raise ValueError("a model API target must be an http or https URL")
+            if self.stream_url:
+                raise ValueError("a model API target does not use an SSE stream URL — clear it")
+            if not self.model and "{{model}}" in self.template:
+                raise ValueError("enter the model name (or fetch the endpoint's models)")
         if self.auth_type not in ("none", "bearer", "basic", "api_key"):
             raise ValueError(f"unknown auth type {self.auth_type!r}")
         if self.auth_type == "bearer" and not self.token:
@@ -79,12 +118,14 @@ class TargetConfig:
             raise ValueError("basic auth requires a username and/or password")
         if self.ca_bundle and not Path(self.ca_bundle).exists():
             raise ValueError(f"CA bundle not found: {self.ca_bundle}")
-        # _render fills in only these two, so any other {{...}} would reach the target verbatim.
-        for name in re.findall(r"\{\{([^{}]*)\}\}", self.body_template):
-            if name not in ("prompt", "messages"):
+        # _render fills in only these, so any other {{...}} would reach the target verbatim.
+        known = (("prompt", "messages", "model", "system_prompt") if self.kind == "model"
+                 else ("prompt", "messages"))
+        for name in re.findall(r"\{\{([^{}]*)\}\}", self.template):
+            if name not in known:
                 raise ValueError(f"unknown placeholder {{{{{name}}}}} in the request body — only "
-                                 "{{prompt}} and {{messages}} are filled in; write any other value "
-                                 "literally")
+                                 + ", ".join(f"{{{{{k}}}}}" for k in known)
+                                 + " are filled in; write any other value literally")
         # A dot path never holds "://"; a URL here gets split on its dots and surfaces as an
         # opaque KeyError: 'https://apiai' from the first segment.
         if "://" in self.response_path:
@@ -121,11 +162,25 @@ def auth_headers(cfg: TargetConfig) -> dict[str, str]:
     return {}
 
 
-def _render(template: str, prompt: str, messages: list[dict[str, str]]) -> str:
-    # json.dumps(...)[1:-1] escapes the prompt for interpolation inside a JSON string literal.
-    return template.replace("{{prompt}}", json.dumps(prompt)[1:-1]).replace(
-        "{{messages}}", json.dumps(messages)
-    )
+def _render(template: str, prompt: str, messages: list[dict[str, str]],
+            cfg: TargetConfig | None = None) -> str:
+    # json.dumps(...)[1:-1] escapes a value for interpolation inside a JSON string literal.
+    text = lambda v: json.dumps(v)[1:-1]
+    body = template.replace("{{prompt}}", text(prompt)).replace("{{messages}}", json.dumps(messages))
+    if cfg is not None:
+        body = body.replace("{{model}}", text(cfg.model)).replace(
+            "{{system_prompt}}", text(cfg.system_prompt))
+    return body
+
+
+def _model_turn(cfg: TargetConfig, prompt: str) -> tuple[str, list[dict[str, str]]]:
+    """A model target's prompt and messages for one attack: no earlier turns, the
+    system prompt first -- or, for a single-text completion API, ahead of the prompt."""
+    system = [{"role": "system", "content": cfg.system_prompt}] if cfg.system_prompt else []
+    messages = [*system, {"role": "user", "content": prompt}]
+    if cfg.api_format == "completion" and cfg.system_prompt:
+        prompt = f"{cfg.system_prompt}\n\n{prompt}"
+    return prompt, messages
 
 
 def _walk(payload: Any, path: str) -> Any:
@@ -387,6 +442,29 @@ async def _stream_reply(cfg: TargetConfig, payload: Any,
     return "".join(parts)
 
 
+def models_url(url: str) -> str:
+    """Where an OpenAI-style server lists its models: /v1/models beside /v1/chat/completions."""
+    p = urlparse(url)
+    root = p.path[:p.path.index("/v1/") + 3] if "/v1/" in p.path else "/v1"
+    return urlunparse((p.scheme, p.netloc, f"{root}/models", "", "", ""))
+
+
+async def list_models(cfg: TargetConfig) -> tuple[str, list[str]]:
+    """The model ids a model API serves, asked with the target's own auth and TLS.
+
+    Reads the OpenAI shape (data[].id) and Ollama's /api/tags shape (models[].name)."""
+    url = models_url(cfg.url)
+    headers = {**auth_headers(cfg), **cfg.headers}
+    async with httpx.AsyncClient(verify=build_ssl_context(cfg), timeout=min(cfg.timeout, 15.0)) as c:
+        res = await c.get(url, headers=headers)
+    res.raise_for_status()
+    body = res.json()
+    items = (body.get("data") or body.get("models") or []) if isinstance(body, dict) else body
+    ids = [i if isinstance(i, str) else str(i.get("id") or i.get("name") or i.get("model") or "")
+           for i in items if isinstance(i, (str, dict))]
+    return url, sorted({i for i in ids if i})
+
+
 def build_ssl_context(cfg: TargetConfig) -> ssl.SSLContext:
     """One trust store for both transports.
 
@@ -468,14 +546,20 @@ async def open_session(cfg: TargetConfig):
     history: list[dict[str, str]] = []
     headers = {**auth_headers(cfg), **cfg.headers}
 
+    template = cfg.template
     if cfg.scheme in ("http", "https"):
-        template = cfg.body_template or DEFAULT_HTTP_BODY
         async with httpx.AsyncClient(verify=build_ssl_context(cfg), timeout=cfg.timeout) as client:
 
             async def chat(prompt: str, on_chunk: Callable[[str], object] | None = None,
                            trace: list[str] | None = None) -> str:
-                history.append({"role": "user", "content": prompt})
-                body = _render(template, prompt, history)
+                if cfg.kind == "model":  # single-turn: each attack stands alone
+                    sent, messages = _model_turn(cfg, prompt)
+                    body = _render(template, sent, messages, cfg)
+                    _note(trace, f"model {cfg.model or '(none)'} · {cfg.api_format} · system prompt "
+                                 f"{len(cfg.system_prompt)} chars · single-turn")
+                else:
+                    history.append({"role": "user", "content": prompt})
+                    body = _render(template, prompt, history)
                 res = await client.request(
                     cfg.method.upper(),
                     cfg.url,
@@ -490,15 +574,15 @@ async def open_session(cfg: TargetConfig):
                     payload = res.text
                 # A StreamToken anywhere in the reply starts the stream, not a form field.
                 reply = (await _stream_reply(cfg, payload, on_chunk, trace, body)
-                         if cfg.stream_url or find_token(payload)[0]
-                         else extract(payload, cfg.response_path))
-                history.append({"role": "assistant", "content": reply})
+                         if cfg.kind != "model" and (cfg.stream_url or find_token(payload)[0])
+                         else extract(payload, cfg.reply_path))
+                if cfg.kind != "model":
+                    history.append({"role": "assistant", "content": reply})
                 return reply
 
             yield chat
         return
 
-    template = cfg.body_template or DEFAULT_WS_BODY
     async with websockets.connect(
         cfg.url,
         additional_headers=headers or None,

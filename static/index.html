@@ -294,7 +294,12 @@
   <details class="sec" id="sec-conn" open>
     <summary><b>Connection</b><span class="sum"></span></summary>
     <div class="body">
-      <label for="url">URL (http / https / ws / wss)</label>
+      <label for="target_kind">Target type</label>
+      <select id="target_kind">
+        <option value="endpoint">Chat endpoint / agent</option>
+        <option value="model">Model API (self-trained model)</option>
+      </select>
+      <label for="url" id="url-label">URL (http / https / ws / wss)</label>
       <input type="text" id="url" value="http://localhost:8000/chat">
 
       <label for="auth_type">Authentication</label>
@@ -323,6 +328,31 @@
     </div>
   </details>
 
+  <details class="sec" id="sec-model" open hidden>
+    <summary><b>Model</b><span class="sum"></span></summary>
+    <div class="body">
+      <label for="api_format">API format</label>
+      <select id="api_format">
+        <option value="openai">OpenAI-compatible chat (vLLM, TGI /v1, Ollama, LM Studio, LiteLLM)</option>
+        <option value="completion">Raw text completion (TGI /generate)</option>
+        <option value="custom">Custom JSON (your own request body)</option>
+      </select>
+      <label for="model">Model</label>
+      <div class="row">
+        <input type="text" id="model" list="model_list" placeholder="the served model name, e.g. my-org/sft-7b">
+        <button type="button" class="ghost" id="model_fetch" style="flex:0 0 auto">Fetch models</button>
+      </div>
+      <datalist id="model_list"></datalist>
+      <div class="hint" id="model-out" role="status" aria-live="polite">Fetch models asks the endpoint's
+        <code>/v1/models</code> with the auth above. Or type the name.</div>
+      <label for="model_system_prompt">System prompt</label>
+      <textarea id="model_system_prompt" rows="4" placeholder="Sent to the model ahead of every attack"></textarea>
+      <label class="inline"><input type="checkbox" id="sp_ground_truth" checked> Also give it to Red's judge as ground truth</label>
+      <div class="hint">Each attack is a fresh single-turn request: the system prompt, then the
+        attack, with no earlier turns. Multi-turn strategies are off for model targets.</div>
+    </div>
+  </details>
+
   <details class="sec" id="sec-req" open>
     <summary><b>Request</b><span class="sum"></span></summary>
     <div class="body">
@@ -330,10 +360,12 @@
         <label for="method">HTTP method</label>
         <select id="method"><option>POST</option><option>PUT</option><option>PATCH</option><option>GET</option></select>
       </div>
+      <div id="body_box">
       <label for="body_template">Request body template</label>
       <textarea id="body_template" rows="3" placeholder='{"message": "{{prompt}}"}'></textarea>
-      <div class="hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
+      <div class="hint" id="body_hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
         [{role,content}] history (use it for multi-turn crescendo scans).</div>
+      </div>
       <label for="headers">Extra headers (JSON)</label>
       <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
     </div>
@@ -344,6 +376,7 @@
     <div class="body">
       <label for="response_path">Response path</label>
       <input type="text" id="response_path" placeholder="e.g. choices.0.message.content — blank = whole body">
+      <div id="stream_box">
       <label for="stream_url">SSE stream URL <span class="hint" style="display:inline">(optional)</span></label>
       <input type="text" id="stream_url" placeholder="https://…/path/to/{StreamToken}">
       <div class="hint">Any reply carrying a <code>StreamToken</code> opens an SSE stream on its own:
@@ -353,6 +386,7 @@
         <code>StreamUrl</code> in its reply or from the target URL, so this is optional. A
         <strong>ws/wss</strong> target's reply names only the token, so set the https SSE endpoint
         here. Response path then points inside each event.</div>
+      </div>
     </div>
   </details>
 
@@ -438,6 +472,8 @@
             <option value="crescendo">crescendo — multi-turn escalation</option>
             <option value="smoke">smoke — canned sanity check</option>
           </select>
+          <div class="hint" id="strategy_note" hidden>crescendo is multi-turn and adaptive, so it is
+            off for a model API target.</div>
         </div>
         <div><label for="concurrency">Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
         <div><label for="response_timeout_seconds">Reply timeout (s, 1–480)</label>
@@ -469,6 +505,12 @@
       <label for="custom_objectives">Custom objectives (JSON array, optional)</label>
       <textarea id="custom_objectives" rows="2"
         placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."]}]'></textarea>
+      <label class="inline"><input type="checkbox" id="threat_model"> Add objectives from agent threat modeling</label>
+      <label class="inline" id="refresh_tm_box" hidden><input type="checkbox" id="refresh_threat_model"> Re-infer the topology first</label>
+      <div class="hint" id="threat_model_hint">Red infers the target's topology from its ground truth
+        (Target profile, or the model's system prompt), finds its weaknesses and adds one objective per
+        weakness to this scan. A stored topology is reused until the ground truth changes. Needs agent
+        threat modeling enabled for your Red account; not for smoke.</div>
     </div>
   </details>
 
@@ -594,17 +636,38 @@ document.querySelectorAll("input[type=password]").forEach(input => {
 });
 
 // ---- dependent visibility: one place, so restoring a saved form shows the right fields
+const isModel = () => $("target_kind").value === "model";
+// The reply path each preset model API format fills in when Response path is blank.
+const MODEL_PATHS = {openai: "choices.0.message.content", completion: "generated_text"};
+const BODY_HINTS = {
+  endpoint: '<code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full [{role,content}] history (use it for multi-turn crescendo scans).',
+  model: '<code>{{model}}</code> = model name, <code>{{system_prompt}}</code> = system prompt, <code>{{prompt}}</code> = the attack, <code>{{messages}}</code> = [system, user] for this single turn.',
+};
 function refresh() {
-  const auth = $("auth_type").value, strategy = $("strategy").value, ca = $("ca_mode").value;
+  const auth = $("auth_type").value, ca = $("ca_mode").value;
   const ws = /^wss?:/i.test($("url").value.trim());
+  const model = isModel(), fmt = $("api_format").value, preset = model && fmt !== "custom";
   $("auth_bearer").hidden = auth !== "bearer";
   $("auth_basic").hidden  = auth !== "basic";
   $("auth_apikey").hidden = auth !== "api_key";
-  $("http_only").hidden = ws;
-  $("body_template").placeholder = ws ? "{{prompt}}" : '{"message": "{{prompt}}"}';
-  $("response_path").placeholder = $("stream_url").value.trim()
-    ? "content — field inside each SSE event (blank = content)"
+  $("sec-model").hidden = !model;
+  $("url-label").textContent = model ? "Model API URL (http / https)" : "URL (http / https / ws / wss)";
+  $("http_only").hidden = ws || preset;
+  $("body_box").hidden = preset;
+  $("stream_box").hidden = model;
+  $("body_hint").innerHTML = BODY_HINTS[model ? "model" : "endpoint"];
+  $("body_template").placeholder = model ? '{"model": "{{model}}", "system": "{{system_prompt}}", "input": "{{prompt}}"}'
+    : ws ? "{{prompt}}" : '{"message": "{{prompt}}"}';
+  $("response_path").placeholder = preset ? `blank = ${MODEL_PATHS[fmt]}`
+    : $("stream_url").value.trim() && !model ? "content — field inside each SSE event (blank = content)"
     : "e.g. choices.0.message.content — blank = whole body";
+  // A model target answers each attack on its own, so the multi-turn adaptive strategy is locked out.
+  $("strategy").querySelector("option[value=crescendo]").disabled = model;
+  if (model && $("strategy").value === "crescendo") $("strategy").value = "static";
+  $("strategy_note").hidden = !model;
+  const strategy = $("strategy").value;
+  $("threat_model").disabled = strategy === "smoke";  // smoke ignores objectives
+  $("refresh_tm_box").hidden = !$("threat_model").checked || strategy === "smoke";
   $("p_static").hidden = strategy !== "static";
   $("p_crescendo").hidden = strategy !== "crescendo";
   $("p_smoke").hidden = strategy !== "smoke";
@@ -612,7 +675,7 @@ function refresh() {
   $("ca_upload_box").hidden = ca !== "upload";
   updateSummaries();
 }
-["auth_type", "strategy"].forEach(id => $(id).addEventListener("change", refresh));
+["auth_type", "strategy", "target_kind", "api_format", "threat_model"].forEach(id => $(id).addEventListener("change", refresh));
 ["url", "stream_url"].forEach(id => $(id).addEventListener("input", refresh));
 $("ca_mode").addEventListener("change", () => { refresh(); if ($("ca_mode").value === "upload") loadStoredCAs(); });
 
@@ -622,15 +685,19 @@ const SUMMARIES = {
   "sec-red": () => [$("api_key").value ? "key entered" : "key from server env", host($("base_url").value)],
   "sec-conn": () => {
     const url = $("url").value.trim(), scheme = (url.match(/^(\w+):/) || [])[1];
-    return [scheme, host(url), $("auth_type").selectedOptions[0]?.text.toLowerCase()];
+    return [isModel() ? "model API" : "", scheme, host(url), $("auth_type").selectedOptions[0]?.text.toLowerCase()];
   },
+  "sec-model": () => [{openai: "OpenAI chat", completion: "text completion", custom: "custom JSON"}[$("api_format").value],
+                      $("model").value.trim() || "no model", $("model_system_prompt").value.trim() ? "system prompt" : "no system prompt"],
   "sec-req": () => {
     let n = 0; try { n = Object.keys(JSON.parse($("headers").value || "{}")).length; } catch {}
+    if (isModel() && $("api_format").value !== "custom") return ["preset body", n ? `${n} header(s)` : ""];
     return [/^wss?:/i.test($("url").value.trim()) ? "ws message" : $("method").value,
             $("body_template").value.trim() ? "custom body" : "default body", n ? `${n} header(s)` : ""];
   },
-  "sec-resp": () => [$("response_path").value.trim() || ($("stream_url").value.trim() ? "content" : "whole body"),
-                     $("stream_url").value.trim() ? "SSE stream" : ""],
+  "sec-resp": () => [$("response_path").value.trim() || (isModel() && MODEL_PATHS[$("api_format").value])
+                     || ($("stream_url").value.trim() ? "content" : "whole body"),
+                     $("stream_url").value.trim() && !isModel() ? "SSE stream" : ""],
   "sec-tls": () => [$("verify_tls").checked || $("ca_mode").value !== "none" ? "verified" : "not verified",
                     $("ca_mode").value !== "none" ? "custom CA" : ""],
   "sec-profile": () => [$("target_id").value.trim() || $("target_name").value.trim(),
@@ -638,7 +705,8 @@ const SUMMARIES = {
   "sec-scan": () => {
     const s = $("strategy").value, n = objBoxes().filter(c => c.checked).length;
     return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns` : "",
-            n ? `${n} objective(s)` : "all objectives", $("language").value];
+            n ? `${n} objective(s)` : "all objectives",
+            $("threat_model").checked && s !== "smoke" ? "+ threat model" : "", $("language").value];
   },
 };
 function updateSummaries() {
@@ -740,7 +808,7 @@ async function applySnapshot(s) {
 
 let ready = false;
 const saveForm = () => { if (ready) store.set(FORM_KEY, snapshot()); };
-const TARGET_SECTIONS = ["sec-conn", "sec-req", "sec-resp", "sec-tls"];
+const TARGET_SECTIONS = ["sec-conn", "sec-model", "sec-req", "sec-resp", "sec-tls"];
 const edited = e => {
   if ("noSave" in e.target.dataset) return;
   saveForm(); updateSummaries();
@@ -850,19 +918,24 @@ Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/objectives").
 
 // ---- field checks: the client-side mirror of TargetConfig.validate(), so a value in the
 // wrong field is caught where it was typed instead of as a server error after Run.
-const PLACEHOLDERS = ["prompt", "messages"];
+const placeholders = () => isModel() ? ["prompt", "messages", "model", "system_prompt"] : ["prompt", "messages"];
 const jsonError = (v, ok, message) => {
   if (!v.trim()) return "";
   try { return ok(JSON.parse(v)) ? "" : message; } catch { return "Not valid JSON — " + message; }
 };
 const CHECKS = {
   url: v => !v ? "Enter the target URL."
+    : isModel() && !/^https?:\/\/[^/\s]/i.test(v) ? "A model API is reached over http or https."
     : /^(https?|wss?):\/\/[^/\s]/i.test(v) ? "" : "Use an http, https, ws or wss URL.",
+  model: v => !v && isModel() && ($("api_format").value === "openai"
+    || ($("api_format").value === "custom" && $("body_template").value.includes("{{model}}")))
+    ? "Enter the model name, or use Fetch models." : "",
   response_path: v => v.includes("://")
     ? "This is a dot path into the reply (e.g. choices.0.message.content), not a URL — put the stream endpoint in SSE stream URL." : "",
   body_template: v => {
-    const bad = [...v.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]).filter(n => !PLACEHOLDERS.includes(n));
-    return bad.length ? `Only {{prompt}} and {{messages}} are filled in — write ${bad.map(n => `{{${n}}}`).join(", ")} as a literal value.` : "";
+    const known = placeholders();
+    const bad = [...v.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]).filter(n => !known.includes(n));
+    return bad.length ? `Only ${known.map(n => `{{${n}}}`).join(", ")} are filled in — write ${bad.map(n => `{{${n}}}`).join(", ")} as a literal value.` : "";
   },
   stream_url: v => v && !/^https?:\/\/[^/\s]/i.test(v) ? "The SSE stream URL must be an http or https URL." : "",
   headers: v => jsonError(v, o => o && typeof o === "object" && !Array.isArray(o)
@@ -873,7 +946,7 @@ const NOTES = {
   stream_url: v => !v && /^wss?:/i.test($("url").value.trim())
     ? "A ws/wss target's reply names only the token — if it streams, set the https endpoint here." : "",
 };
-const TARGET_FIELDS = ["url", "response_path", "body_template", "stream_url", "headers"];
+const TARGET_FIELDS = ["url", "model", "response_path", "body_template", "stream_url", "headers"];
 
 // A link copied from chat as [text](url), or a JS template such as
 // .../stream/${encodeURIComponent(streamToken)}, becomes the plain URL and {StreamToken}.
@@ -924,14 +997,21 @@ Object.keys(CHECKS).forEach(id => {
   $(id).addEventListener("input", () => { if ($(id).hasAttribute("aria-invalid")) checkField(id); });
 });
 $("url").addEventListener("change", () => checkField("stream_url"));
+// Switching between an endpoint and a model API changes what url, model and body accept.
+["target_kind", "api_format"].forEach(id => $(id).addEventListener("change", () =>
+  ["url", "model", "body_template"].forEach(f => { if ($(f).value.trim() || $(f).hasAttribute("aria-invalid")) checkField(f); })));
 
 const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean);
 const parseJSON = (v, fallback) => { try { return v.trim() ? JSON.parse(v) : fallback; }
                                      catch { throw new Error("invalid JSON: " + v.slice(0, 60)); } };
 
 function targetSpec() {
-  const auth = $("auth_type").value;
+  const auth = $("auth_type").value, model = isModel();
   return {
+    kind: model ? "model" : "endpoint",
+    api_format: $("api_format").value,
+    model: model ? $("model").value.trim() : "",
+    system_prompt: model ? $("model_system_prompt").value : "",
     url: $("url").value.trim(),
     auth_type: auth,
     token: auth === "bearer" ? $("token_bearer").value : auth === "api_key" ? $("token_apikey").value : "",
@@ -941,7 +1021,7 @@ function targetSpec() {
     method: $("method").value,
     body_template: $("body_template").value,
     response_path: $("response_path").value.trim(),
-    stream_url: $("stream_url").value.trim(),
+    stream_url: model ? "" : $("stream_url").value.trim(),
     headers: parseJSON($("headers").value, {}),
     verify_tls: $("verify_tls").checked,
     ca_bundle: caBundle(),
@@ -960,6 +1040,28 @@ function showOut(id, cls, title, ...body) {
 
 const fixFirst = n => `Fix the ${n === 1 ? "highlighted field" : n + " highlighted fields"} first.`;
 function blocked(id, n) { showOut(id, "fail", fixFirst(n)); $(id).dataset.blocked = "1"; }  // cleared by the next edit
+
+$("model_fetch").onclick = async () => {
+  if (checkFields(["url", "headers"]).length) return;
+  const out = $("model-out");
+  out.className = "hint"; out.textContent = "Asking the endpoint for its models…";
+  try {
+    const r = await fetch("/api/models", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({target: targetSpec()})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail ? JSON.stringify(d.detail) : "HTTP " + r.status);
+    if (!d.ok) throw new Error(d.error + (d.tls_hint ? " — " + d.tls_hint : ""));
+    $("model_list").replaceChildren(...d.models.map(m => h("option", {value: m})));
+    if (d.models.length === 1 || (d.models.length && !$("model").value.trim())) {
+      $("model").value = d.models[0];
+      $("model").dispatchEvent(new Event("input", {bubbles: true}));
+      checkField("model");
+    }
+    out.textContent = d.models.length
+      ? `${d.models.length} model(s) at ${d.url}: ${d.models.join(", ")} — pick one in the Model field.`
+      : `${d.url} lists no models — type the name.`;
+  } catch (e) { out.className = "hint error"; out.textContent = "Could not list models: " + e.message + " — type the name instead."; }
+};
 
 $("probe").onclick = async () => {
   const bad = checkFields(TARGET_FIELDS);
@@ -1089,6 +1191,8 @@ $("form").onsubmit = async ev => {
       target_name: $("target_name").value.trim(),
       target_id: $("target_id").value.trim(),
       refresh_recon: $("refresh_recon").checked,
+      threat_model: $("threat_model").checked && s !== "smoke",
+      refresh_threat_model: $("refresh_threat_model").checked,
       app_context: {
         app_description: $("app_description").value.trim(),
         allowed_actions: lines($("allowed_actions").value),
@@ -1111,6 +1215,7 @@ $("form").onsubmit = async ev => {
       concurrency: +$("concurrency").value,
       language: $("language").value,
       response_timeout_seconds: $("response_timeout_seconds").value ? +$("response_timeout_seconds").value : null,
+      system_prompt_as_ground_truth: $("sp_ground_truth").checked,
       target: targetSpec(),
     };
   } catch (e) { $("form-err").textContent = e.message; return; }
@@ -1366,6 +1471,8 @@ $("history").onchange = () => {
 })();
 
 // ---------------------------------------------------------------- results
+// A threat-model objective's key is generated.<target>.<hash>; show the name Red gave it.
+const generatedName = id => run?.snap?.objective_names?.[id] && `${run.snap.objective_names[id]} (threat model)`;
 const verdictOf = r => r.error && /timed out/i.test(r.error) ? "timeout" : r.error ? "error"
   : r.isSuccessful ? "malicious" : r.evaluation?.attackSuccessScore == null ? "unscored" : "safe";
 const VERDICT_PILL = {malicious: "fail", safe: "pass", error: "err", timeout: "err", unscored: "err"};
@@ -1429,7 +1536,8 @@ function renderResults() {
   const body = h("tbody", {}, sortedRows(rows).flatMap(r => {
     const e = r.evaluation || {}, v = verdictOf(r), text = r.error || e.explanation || "";
     const row = h("tr", {className: "res-row", tabIndex: 0},
-      h("td", {className: "objective", textContent: r.objectiveId}),
+      h("td", {className: "objective", title: r.objectiveId,
+                textContent: generatedName(r.objectiveId) || r.objectiveId}),
       h("td", {}, h("span", {className: "pill " + VERDICT_PILL[v], textContent: v})),
       h("td", {textContent: e.attackSuccessScore ?? "–"}),
       h("td", {}, h("div", {className: "clamp", textContent: text})));

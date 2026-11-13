@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from lakera_red_sdk import (
     CrescendoStrategyOptions,
     CustomObjective,
+    GeneratedObjective,
     GroundTruth,
     LakeraRedClient,
     ReconContext,
@@ -35,7 +36,7 @@ from lakera_red_sdk import (
 )
 from pydantic import BaseModel, Field
 
-from targets import TargetConfig, explain_tls_failure, open_session
+from targets import TargetConfig, explain_tls_failure, list_models, open_session
 from tls_doctor import MAX_CA_BYTES, adiagnose, read_ca_pems
 
 HERE = Path(__file__).parent
@@ -88,6 +89,10 @@ class TargetSpec(BaseModel):
     verify_tls: bool = False
     ca_bundle: str = ""
     timeout: float = 60.0
+    kind: Literal["endpoint", "model"] = "endpoint"
+    api_format: Literal["openai", "completion", "custom"] = "openai"
+    model: str = ""
+    system_prompt: str = ""
 
     def to_config(self) -> TargetConfig:
         return TargetConfig(**self.model_dump())
@@ -156,6 +161,10 @@ class ScanRequest(BaseModel):
     target_name: str = ""
     target_id: str = ""            # set to reuse an existing target by id
     refresh_recon: bool = False    # re-run recon on the target before scanning
+    # Agent threat modeling (SDK 0.12): add one generated objective per weakness Red finds
+    # in the target's ground truth; refresh = infer the topology again even if it is current.
+    threat_model: bool = False
+    refresh_threat_model: bool = False
     app_context: AppContextSpec = Field(default_factory=AppContextSpec)
     ground_truth: GroundTruthSpec = Field(default_factory=GroundTruthSpec)
     strategy: StrategySpec = Field(default_factory=StrategySpec)
@@ -166,8 +175,17 @@ class ScanRequest(BaseModel):
     # How long Red waits for each reply before abandoning that objective (SDK 0.10+,
     # stored on the target). None keeps the target's stored value, or Red's 300 s default.
     response_timeout_seconds: int | None = Field(None, ge=1, le=480)
+    # Model targets: also hand the system prompt sent to the model to Red's judge.
+    system_prompt_as_ground_truth: bool = True
     # Target under test
     target: TargetSpec
+
+    def ground_truth_for_judge(self) -> GroundTruth | None:
+        gt = self.ground_truth
+        if self.target.kind == "model" and self.system_prompt_as_ground_truth \
+                and self.target.system_prompt:
+            gt = gt.model_copy(update={"system_prompt": self.target.system_prompt})
+        return gt.to_ground_truth()
 
     def resolved_key(self) -> str:
         # Trimmed: a pasted newline would make httpx quote the whole key in its error.
@@ -231,6 +249,7 @@ class Run:
     dashboard_link: str | None = None
     results: dict[str, Any] | None = None
     error: str | None = None
+    objective_names: dict[str, str] = field(default_factory=dict)  # generated key -> name
     started: float = field(default_factory=time.time)
     bell: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
@@ -257,6 +276,7 @@ class Run:
             "dashboard_link": self.dashboard_link,
             "results": self.results,
             "error": self.error,
+            "objective_names": self.objective_names,
             "started": self.started,
             "log_count": len(self.logs),
         }
@@ -328,6 +348,35 @@ def _make_handler(run: Run, cfg: TargetConfig):
     return handler
 
 
+async def _threat_model_objectives(client: LakeraRedClient, run: Run, target_id: str,
+                                   refresh: bool) -> list[GeneratedObjective]:
+    """The target's threat-model objectives: the stored ones while its topology is
+    current, otherwise a fresh topology and objectives inferred from its ground truth."""
+    try:
+        topology = None if refresh else await client.get_topology(target_id)
+        if topology is not None and topology.is_stale:
+            run.log("warn", "threat-model topology is out of date (ground truth changed), "
+                            "inferring it again")
+            topology = None
+        if topology is None:
+            topology = await client.infer_topology(target_id)
+            run.log("info", "topology inferred", generated_at=topology.generated_at)
+            generated = await client.generate_objectives(target_id)
+        else:
+            run.log("info", "reusing the stored topology", generated_at=topology.generated_at)
+            generated = (await client.get_generated_objectives(target_id)
+                         or await client.generate_objectives(target_id))
+    except RuntimeError as exc:
+        raise RuntimeError(f"agent threat modeling failed: {exc} — it must be enabled for the "
+                           "Red account, and the target needs ground truth (system prompt "
+                           "and/or tools)") from exc
+    if not generated:
+        raise RuntimeError("agent threat modeling found no weaknesses to generate objectives for")
+    run.log("info", f"threat model: {len(generated)} generated objective(s)",
+            objectives=", ".join(o.name for o in generated))
+    return generated
+
+
 async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
     cfg = req.target.to_config()
     cfg.validate()
@@ -350,7 +399,7 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
             target = await client.create_or_get_target(
                 req.target_name or "web-service target",
                 app_context=req.app_context.to_recon(),
-                ground_truth=req.ground_truth.to_ground_truth(),
+                ground_truth=req.ground_truth_for_judge(),
                 response_timeout_seconds=req.response_timeout_seconds,
                 handler=handler,
             )
@@ -362,11 +411,21 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
             recon = await client.run_recon(target.target_id, handler)
             run.log("info", "recon finished", discovered=bool(recon))
 
+        objectives = req.objectives or None
+        if req.threat_model:
+            run.status = "threat modeling"
+            generated = await _threat_model_objectives(
+                client, run, target.target_id, req.refresh_threat_model)
+            run.objective_names = {o.key: o.name for o in generated}
+            # Added to the selection; an empty selection means every catalogue objective,
+            # which must stay so rather than shrink to the generated ones alone.
+            objectives = (req.objectives or [i for i, _, _ in OBJECTIVES]) + [o.key for o in generated]
+
         run.status = "creating scan"
         scan = await client.create_scan(
             target.target_id,
             name=req.scan_name,
-            objectives=req.objectives or None,
+            objectives=objectives,
             custom_objectives=[CustomObjective(**o.model_dump()) for o in req.custom_objectives]
             or None,
             strategy=req.strategy.to_options(),
@@ -452,6 +511,18 @@ async def probe(req: ProbeRequest) -> dict[str, Any]:
             "trace": trace, "chunks": len(chunks) or None}
 
 
+@app.post("/api/models")
+async def models(req: ProbeRequest) -> dict[str, Any]:
+    """List the models a model API target serves, using the target's own auth and TLS."""
+    cfg = req.target.to_config()
+    try:
+        url, ids = await list_models(cfg)
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                "tls_hint": explain_tls_failure(exc, cfg)}
+    return {"ok": True, "url": url, "models": ids}
+
+
 @app.post("/api/ca")
 async def upload_ca(req: CaUploadRequest) -> dict[str, Any]:
     """Store a CA bundle uploaded as file bytes (base64) or pasted as PEM text."""
@@ -532,6 +603,17 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
         req.target.to_config().validate()
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # A model target gets each attack as a fresh single-turn request, so a multi-turn
+    # adaptive strategy has no conversation to escalate.
+    if req.threat_model and req.strategy.name == "smoke":
+        raise HTTPException(400, "the smoke strategy ignores objectives, so threat-model "
+                                 "objectives would not run — use static or crescendo")
+    if req.threat_model and not req.target_id and req.ground_truth_for_judge() is None:
+        raise HTTPException(400, "agent threat modeling infers the topology from ground truth "
+                                 "— fill in the ground truth system prompt and/or tools")
+    if req.target.kind == "model" and req.strategy.name == "crescendo":
+        raise HTTPException(400, "crescendo is multi-turn and adaptive; a model API target "
+                                 "runs single-turn — use the static or smoke strategy")
     run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url))
     RUNS[run.id] = run
     run.log("info", "run queued")

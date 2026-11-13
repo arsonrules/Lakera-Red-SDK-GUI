@@ -1,7 +1,7 @@
 # Lakera Red Runner
 
-A web UI and small API for running [Check Point AI Red Teaming](https://docs.lakera.ai/docs/red/sdk-v0.11.x-quickstart)
-(`lakera-red-sdk` 0.11.x, shown next to the title in the UI) scans against any chat endpoint. Fill in the target, start a scan,
+A web UI and small API for running [Check Point AI Red Teaming](https://docs.lakera.ai/docs/red/sdk-quickstart)
+(`lakera-red-sdk` 0.12.x, shown next to the title in the UI) scans against any chat endpoint. Fill in the target, start a scan,
 and watch the attacks and your agent's replies as they happen. When the scan finishes,
 read the verdicts and export them.
 
@@ -137,6 +137,32 @@ the history with `{{messages}}`:
 
 with response path `choices.0.message.content`.
 
+## Self-trained models
+
+To red-team a model of your own, rather than an app built on one, set **Target type** to
+**Model API (self-trained model)**. The **Model** section then appears:
+
+- **Model API URL and auth.** Any http or https endpoint, with the same auth methods (none,
+  bearer, basic, API key header), extra headers and TLS settings as any other target.
+- **API format.**
+  - *OpenAI-compatible chat* covers vLLM, TGI `/v1`, Ollama `/v1`, LM Studio and LiteLLM.
+    The body is `{"model": …, "messages": [system, user]}`, and the reply is read from
+    `choices.0.message.content`.
+  - *Raw text completion* is TGI's `/generate`. The system prompt is put in front of the
+    attack in the single `inputs` string, and the reply is read from `generated_text`.
+  - *Custom JSON* is for an in-house server. You write the body with `{{model}}`,
+    `{{system_prompt}}`, `{{prompt}}` and `{{messages}}`, and set the response path.
+- **Model.** Type the served model name, or click **Fetch models** to list what the
+  endpoint serves. It asks `…/v1/models` with the target's own auth and TLS, and reads both
+  the OpenAI shape (`data[].id`) and Ollama's (`models[].name`).
+- **System prompt.** Sent ahead of every attack. With **Also give it to Red's judge as
+  ground truth** ticked (the default), it replaces the Ground truth system prompt, so the
+  judge scores against the prompt the model actually got.
+
+Every attack is a fresh single-turn request: the system prompt, then the attack, and no
+earlier turns. So multi-turn, adaptive testing is off for model targets. **crescendo** is
+greyed out in the UI, and the API refuses it with HTTP 400. Use **static** or **smoke**.
+
 ## Streaming (SSE) targets
 
 Some targets return a token instead of the answer, and stream the text from an SSE
@@ -187,6 +213,25 @@ form covers all the ways to set it:
 **Ground truth** (the real system prompt and tool definitions) is optional. It makes the
 judge more precise and cuts false positives.
 
+**Agent threat modeling** (SDK 0.12, off by default). Tick **Add objectives from agent
+threat modeling** in the Scan section. Before the scan starts, Red infers the target's
+topology from its ground truth and assesses it for weaknesses. It then generates one attack
+objective per weakness, and those objectives are added to the scan
+([docs](https://docs.lakera.ai/docs/red/sdk-changelog)).
+
+- They are added to your selection. With nothing selected, every catalogue objective
+  still runs as well.
+- A stored topology and its objectives are reused while they are current. They are
+  regenerated when the ground truth changes, or when **Re-infer the topology first** is
+  ticked.
+- Ground truth is required: the Target profile fields, or a model target's system prompt.
+- It can't be combined with the **smoke** strategy, which ignores objectives.
+- If threat modeling is not enabled for your Red account, the run fails and says so. The
+  generated objectives are never silently skipped.
+- In the results, a generated objective shows by name. Hover over it to see its
+  `generated.<target>.…` key.
+- Over the API, send `"threat_model": true` and, optionally, `"refresh_threat_model": true`.
+
 Not supported: the SDK's tool tracing (`intercept_tool`) and the `tool-response-poisoning`
 strategy. Both need the agent's own code to report its tool calls, and this runner only
 reaches the agent over the network.
@@ -201,6 +246,7 @@ reaches the agent over the network.
 | `GET /api/scans/{id}` | Snapshot: status, name, target, scan id, dashboard link, results, logs |
 | `GET /api/scans/{id}/events` | Server-sent events: live logs and status. Replays the run from the start on each connection |
 | `POST /api/scans/{id}/cancel` | Stop a running scan |
+| `POST /api/models` | List a model API target's models (`…/v1/models`) with its own auth and TLS |
 | `POST /api/tls-check` | Diagnose why an `https` or `wss` endpoint fails verification |
 | `POST /api/ca` | Upload a CA bundle. `{"name":…, "pem":…}`, or `{"name":…, "data_b64":…}` for DER |
 | `GET /api/ca` | List stored bundles with the subjects each contains |
@@ -282,7 +328,11 @@ The server suite runs against real local servers and a mock relay. It covers:
   refresh, target failures, and run listing;
 - streaming targets: the StreamToken hand-off, SSE framing edge cases, each failure mode,
   verdicts on the streamed reply, and no token leaking;
-- the per-objective SSE lifecycle and the reply timeout.
+- the per-objective SSE lifecycle and the reply timeout;
+- agent threat modeling: inference, reuse, staleness, re-infer, the catalogue kept with
+  no selection, refusals (smoke, no ground truth), and an account without the feature;
+- model API targets: each API format, every auth method, Fetch models, the system prompt
+  and its use as ground truth, single-turn requests, and crescendo refused.
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
 phone width, accessibility basics, field checks, the connection test, TLS diagnosis,
@@ -292,7 +342,7 @@ page, and run this in the browser console:
 
 ```js
 const s = document.createElement("script");
-s.src = "<url-of-ui_tests.js>";
+s.src = "http://127.0.0.1:8801/ui_tests.js";  // served by demo_servers.py
 document.head.append(s);
 // after the script loads:
 await uiTests();                 // then reload the page

@@ -65,7 +65,7 @@ async function uiTests() {
   // ---- header, shortcuts, themes
   check("header: shows the Red key status", /^Red key: /.test($("hs-key").textContent) && !!$("hs-key").dataset.s,
     $("hs-key").textContent);
-  check("header: shows the installed SDK version", /^SDK v0\.11\.\d+$/.test($("sdkver").textContent), $("sdkver").textContent);
+  check("header: shows the installed SDK version", /^SDK v0\.12\.\d+$/.test($("sdkver").textContent), $("sdkver").textContent);
   check("reply timeout is bounded to Red's 1–480 s", $("response_timeout_seconds").min === "1"
     && $("response_timeout_seconds").max === "480");
   document.activeElement?.blur();
@@ -210,7 +210,7 @@ async function uiTests() {
   pick("ca_mode", "none");
 
   // ---- sections and sticky actions
-  check("form is grouped into collapsible sections", document.querySelectorAll("details.sec").length === 7);
+  check("form is grouped into collapsible sections", document.querySelectorAll("details.sec").length === 8);
   set("url", "wss://apiai.example.test/ws"); pick("auth_type", "bearer");
   check("a section summary reflects its fields",
     $("sec-conn").querySelector(".sum").textContent === "wss · apiai.example.test · bearer token",
@@ -423,8 +423,77 @@ async function uiTests() {
   check("SSE scan: no reply is left half-streamed", !document.querySelector("#convs .bubble.streaming"));
   check("SSE scan: every streamed reply holds text",
     sseCards.every(c => [...c.querySelectorAll(".bubble.reply .text")].every(t => t.textContent.length > 0)));
+
+  // ---- a model API target: a self-trained model, single-turn
+  if (innerWidth <= 900) $("tab-config").click();  // a narrow page left the form for the run view
+  pick("target_kind", "endpoint"); pick("strategy", "crescendo");
+  check("endpoint mode hides the Model section and allows crescendo",
+    !visible($("sec-model")) && !$("strategy").querySelector("option[value=crescendo]").disabled);
+  pick("target_kind", "model");
+  check("model mode shows the Model section", visible($("sec-model")));
+  check("model mode locks out the multi-turn strategy",
+    $("strategy").querySelector("option[value=crescendo]").disabled && $("strategy").value === "static"
+    && visible($("strategy_note")), $("strategy").value);
+  check("model mode hides the SSE stream URL and the preset body",
+    !visible($("stream_box")) && !visible($("body_box")) && !visible($("method")));
+  set("url", "ws://127.0.0.1:8801/ws");
+  check("model mode refuses a ws URL", invalid("url") && /http or https/.test(msg("url")), msg("url"));
+  set("url", `${DEMO}/v1/chat/completions`);
+  pick("auth_type", "bearer"); set("token_bearer", "tok-bearer-123"); set("model", ""); set("model_system_prompt", "");
+  out = await probe();
+  check("model mode: a missing model name blocks the test", out.classList.contains("fail") && invalid("model"), msg("model"));
+  $("model_fetch").click();
+  await until(() => /model\(s\)|Could not/.test($("model-out").textContent), 10000);
+  check("Fetch models lists the endpoint's models and picks one",
+    $("model_list").options.length === 2 && $("model").value === "acme/sft-7b" && !invalid("model"), $("model-out").textContent);
+  set("model_system_prompt", "UI SFT system");
+  out = await probe();
+  const said = out.querySelector("pre")?.textContent || "";
+  check("model probe: the model gets the system prompt and one user message",
+    out.classList.contains("ok") && said.includes("model=acme/sft-7b") && said.includes("system=UI SFT system")
+    && said.includes("msgs=2"), out.textContent);
+  check("model probe: the steps name the model and single-turn", /acme\/sft-7b.*single-turn/.test(out.textContent));
+  check("the Connection summary says model API", /model API/.test($("sec-conn").querySelector(".sum").textContent));
+  check("the Model summary names the model", /acme\/sft-7b/.test($("sec-model").querySelector(".sum").textContent));
+  pick("api_format", "custom");
+  check("custom JSON shows the body template", visible($("body_box")));
+  set("body_template", '{"x": "{{foo}}"}');
+  check("custom JSON: an unknown placeholder is flagged", invalid("body_template") && msg("body_template").includes("{{foo}}"));
+  set("body_template", '{"model": "{{model}}", "messages": {{messages}}, "s": "{{system_prompt}}"}');
+  check("custom JSON: the model placeholders are accepted", !invalid("body_template"), msg("body_template"));
+  set("body_template", ""); pick("api_format", "openai");
+  set("api_key", "demo"); set("base_url", RELAY);
+  $("go").click();
+  const modelDone = await until(() => $("status").textContent === "done" && !$("go").disabled, 60000);
+  check("a scan against the model target completes", modelDone && $("results").querySelectorAll("tr.res-row").length === OBJS.length,
+    $("status").textContent);
+  if (innerWidth <= 900) $("tab-config").click();
+  pick("target_kind", "endpoint");
+  check("back in endpoint mode crescendo is allowed again", !$("strategy").querySelector("option[value=crescendo]").disabled);
+  pick("auth_type", "none"); set("token_bearer", ""); set("model", ""); set("model_system_prompt", ""); set("api_key", "");
+
   set("url", `${DEMO}/chat`); set("response_path", "choices.0.message.content");
   if (innerWidth <= 900) $("tab-config").click();
+
+  // ---- agent threat modeling: generated objectives added to the scan
+  const tm = $("threat_model");
+  check("threat modeling is off by default", !tm.checked && !visible($("refresh_tm_box")));
+  tm.checked = true; fire("threat_model", "change");
+  check("ticking it offers Re-infer the topology", visible($("refresh_tm_box")));
+  check("the scan summary notes the threat model", /\+ threat model/.test($("sec-scan").querySelector(".sum").textContent));
+  pick("strategy", "smoke");
+  check("smoke disables threat modeling, which needs objectives", tm.disabled && !visible($("refresh_tm_box")));
+  pick("strategy", "static");
+  set("system_prompt", "UI ground truth prompt"); set("api_key", "demo");
+  $("go").click();
+  const tmDone = await until(() => FINAL($("status").textContent) && !$("go").disabled, 60000);
+  const named = [...$("results").querySelectorAll("tr.res-row td.objective")].filter(td => /\(threat model\)$/.test(td.textContent));
+  check("a threat-model scan completes with the generated objectives added",
+    tmDone && $("status").textContent === "done" && resRows().length > OBJS.length, `${$("status").textContent} ${resRows().length}`);
+  check("generated objectives show by name, with the key on hover",
+    named.length > 0 && named.every(td => td.title.startsWith("generated.")), named.map(td => td.textContent).join(" | "));
+  if (innerWidth <= 900) $("tab-config").click();
+  tm.checked = false; fire("threat_model", "change"); set("system_prompt", ""); set("api_key", "");
 
   const failed = results.filter(r => !r.ok);
   return { passed: results.length - failed.length, failed: failed.length, failures: failed };

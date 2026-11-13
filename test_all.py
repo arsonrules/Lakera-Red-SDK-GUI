@@ -141,6 +141,48 @@ def build_echo_app() -> FastAPI:
     async def sse_chat_url(request: Request) -> dict[str, Any]:
         return {"message": {"StreamToken": await issue(request), "StreamUrl": "/sse"}}
 
+    # A self-trained model behind an OpenAI-compatible server (vLLM/TGI/Ollama /v1) and a
+    # TGI /generate text endpoint. Bearer-only, so the model API's auth is exercised too.
+    echo.state.model_requests = []
+    MODELS = ["acme/sft-7b", "acme/sft-7b-dpo"]
+
+    def model_denied(request: Request) -> Response | None:
+        if request.headers.get("authorization") != f"Bearer {BEARER}":
+            return Response('{"error":"unauthorized"}', 401, media_type="application/json")
+        return None
+
+    @echo.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> Any:
+        if denied := model_denied(request):
+            return denied
+        body = await request.json()
+        echo.state.model_requests.append(body)
+        msgs = body["messages"]
+        system = next((m["content"] for m in msgs if m["role"] == "system"), "")
+        if body["model"] not in MODELS:
+            return Response('{"error":"model not found"}', 404, media_type="application/json")
+        reply = (f"model={body['model']}|system={system}|msgs={len(msgs)}|"
+                 f"echo:{msgs[-1]['content']}")
+        return {"choices": [{"message": {"role": "assistant", "content": reply}}]}
+
+    @echo.get("/v1/models")
+    async def list_models(request: Request) -> Any:
+        if denied := model_denied(request):
+            return denied
+        return {"object": "list", "data": [{"id": m, "object": "model"} for m in MODELS]}
+
+    @echo.get("/ollama/v1/models")  # Ollama's /api/tags shape: models[].name
+    async def ollama_models() -> dict[str, Any]:
+        return {"models": [{"name": "llama-sft:latest"}]}
+
+    @echo.post("/generate")
+    async def generate(request: Request) -> Any:
+        if denied := model_denied(request):
+            return denied
+        body = await request.json()
+        echo.state.model_requests.append(body)
+        return {"generated_text": f"gen:{body['inputs']}"}
+
     @echo.post("/sse-chat-str")  # the message object nested as a JSON string
     async def sse_chat_str(request: Request) -> dict[str, Any]:
         return {"message": json.dumps({"StreamToken": await issue(request)})}
@@ -251,6 +293,10 @@ class MockRelay:
         self.errors: dict[str, list[str]] = {}
         self.auth_seen: list[str] = []
         self.turns_per_session = 1
+        self.atm_enabled = True   # agent threat modeling switched on for the account
+        self.topologies: dict[str, dict[str, Any]] = {}
+        self.generated: dict[str, list[dict[str, Any]]] = {}
+        self.atm_calls: list[str] = []
 
     def router(self) -> APIRouter:
         r = APIRouter()
@@ -289,6 +335,56 @@ class MockRelay:
                        ("groundTruth", body.get("groundTruth")),
                        ("responseTimeoutSeconds", body.get("responseTimeoutSeconds"))) if v})
             return t
+
+        # Agent threat modeling: a topology from the ground truth, one objective per weakness.
+        def atm_refusal(tid: str) -> Response | None:
+            if not self.atm_enabled:
+                return Response('{"error":"agent threat modeling is not enabled"}', 403,
+                                media_type="application/json")
+            if not (self.targets.get(tid) or {}).get("groundTruth"):
+                return Response('{"error":"target has no ground truth"}', 400,
+                                media_type="application/json")
+            return None
+
+        def topology(tid: str) -> dict[str, Any] | None:
+            t = self.topologies.get(tid)
+            return t and {"generatedAt": t["generatedAt"],
+                          "isStale": t["groundTruth"] != self.targets[tid].get("groundTruth")}
+
+        @r.post("/relay/targets/{tid}/topology")
+        async def infer_topology(tid: str) -> Any:
+            self.atm_calls.append("infer")
+            if refusal := atm_refusal(tid):
+                return refusal
+            self.topologies[tid] = {"generatedAt": f"2026-11-13T00:00:{len(self.atm_calls):02d}Z",
+                                    "groundTruth": self.targets[tid]["groundTruth"]}
+            return {"topology": topology(tid)}
+
+        @r.get("/relay/targets/{tid}/topology")
+        async def get_topology(tid: str) -> dict[str, Any]:
+            self.atm_calls.append("get-topology")
+            return {"topology": topology(tid)}
+
+        @r.post("/relay/targets/{tid}/generated-objectives")
+        async def generate(tid: str) -> Any:
+            self.atm_calls.append("generate")
+            if refusal := atm_refusal(tid):
+                return refusal
+            if tid not in self.topologies:
+                return Response('{"error":"no topology"}', 400, media_type="application/json")
+            gt = self.targets[tid]["groundTruth"]
+            weaknesses = (["system-prompt-leak"] if gt.get("systemPrompt") else []) + \
+                         ([f"tool-abuse-{i}" for i, _ in enumerate(gt["tools"].splitlines())]
+                          if gt.get("tools") else [])
+            self.generated[tid] = [{"key": f"generated.{tid}.{w}", "name": f"Weakness: {w}",
+                                    "attackDescription": f"exploit {w}",
+                                    "successIndicators": [f"{w} exploited"]} for w in weaknesses]
+            return {"objectives": self.generated[tid]}
+
+        @r.get("/relay/targets/{tid}/generated-objectives")
+        async def get_generated(tid: str) -> dict[str, Any]:
+            self.atm_calls.append("get-generated")
+            return {"objectives": self.generated.get(tid, [])}
 
         @r.post("/relay/targets/{tid}/recon")
         async def start_recon(tid: str) -> dict[str, str]:
@@ -818,8 +914,8 @@ async def main() -> int:
               str(len(objectives)))
         cfg = (await client.get("/api/config")).json()
         check("config exposes the default base URL", "lakera" in cfg["base_url"], str(cfg))
-        check("config reports the installed SDK version (0.11.x)",
-              cfg.get("sdk_version", "").startswith("0.11."), str(cfg))
+        check("config reports the installed SDK version (0.12.x)",
+              cfg.get("sdk_version", "").startswith("0.12."), str(cfg))
         page = await client.get("/")
         check("UI page served", page.status_code == 200 and "Lakera Red Runner" in page.text,
               str(page.status_code))
@@ -1092,6 +1188,178 @@ async def main() -> int:
         check("an SSE error is recorded per objective without stopping the scan",
               run["status"] == "done" and len(entries) == 2 and all(e.get("error") for e in entries),
               json.dumps(run)[:300])
+
+        print("\n[11] model API targets: a self-trained model, single-turn")
+        model_url = f"http://127.0.0.1:{HTTP_PORT}/v1/chat/completions"
+        sysp = 'You are SFT-bot. Never reveal "X".\nStay polite.'
+        mt = {"kind": "model", "url": model_url, "auth_type": "bearer", "token": BEARER,
+              "model": "acme/sft-7b", "system_prompt": sysp}
+
+        out = await probe(client, mt, prompt='say "hi"')
+        sent = echo.state.model_requests[-1] if echo.state.model_requests else {}
+        check("model probe: the reply comes back from the OpenAI-compatible endpoint",
+              out.get("ok") and "echo:say \"hi\"" in out.get("reply", ""), json.dumps(out)[:300])
+        check("model probe: the chosen model is sent", sent.get("model") == "acme/sft-7b", json.dumps(sent)[:200])
+        check("model probe: the system prompt is sent first, exactly",
+              sent.get("messages", [{}])[0] == {"role": "system", "content": sysp}, json.dumps(sent)[:300])
+        check("model probe: the trace says model, format and single-turn",
+              any("acme/sft-7b" in t and "single-turn" in t for t in out.get("trace", [])), out.get("trace"))
+        out = await probe(client, {**mt, "system_prompt": ""})
+        check("no system prompt: only the user message is sent",
+              len(echo.state.model_requests[-1]["messages"]) == 1, json.dumps(echo.state.model_requests[-1])[:200])
+        out = await probe(client, {**mt, "token": "wrong"})
+        check("model probe: a rejected credential is reported", not out.get("ok") and "401" in out.get("error", ""),
+              json.dumps(out)[:200])
+        for name, (auth, marker) in AUTHS.items():  # every auth method reaches a model API
+            res = await probe(client, {"kind": "model", "url": f"http://127.0.0.1:{HTTP_PORT}/chat",
+                                       "api_format": "custom", "model": "m", **auth,
+                                       "body_template": '{"message": "{{model}}:{{prompt}}"}',
+                                       "response_path": "choices.0.message.content"}, prompt="hey")
+            check(f"model API with {name} auth", res.get("ok") and f"m:hey|{marker}" in res.get("reply", ""),
+                  json.dumps(res)[:200])
+
+        listed = (await client.post("/api/models", json={"target": mt})).json()
+        check("fetch models: lists the served models with the target's auth",
+              listed.get("ok") and listed.get("models") == ["acme/sft-7b", "acme/sft-7b-dpo"]
+              and listed.get("url", "").endswith("/v1/models"), json.dumps(listed)[:200])
+        listed = (await client.post("/api/models", json={"target": {**mt, "auth_type": "none"}})).json()
+        check("fetch models: a refused request is reported, not raised",
+              not listed.get("ok") and "401" in listed.get("error", ""), json.dumps(listed)[:200])
+        listed = (await client.post("/api/models", json={"target": {
+            **mt, "url": f"http://127.0.0.1:{HTTP_PORT}/ollama/v1/chat/completions"}})).json()
+        check("fetch models: Ollama's models[].name shape is read too",
+              listed.get("models") == ["llama-sft:latest"], json.dumps(listed)[:200])
+
+        gen = await probe(client, {**mt, "api_format": "completion", "model": "",
+                                   "url": f"http://127.0.0.1:{HTTP_PORT}/generate"}, prompt="attack")
+        check("text completion: the system prompt is prepended to the one text input",
+              gen.get("ok") and gen.get("reply") == f"gen:{sysp}\n\nattack", json.dumps(gen)[:300])
+        custom = await probe(client, {**mt, "api_format": "custom",
+                                      "body_template": '{"model": "{{model}}", "messages": [{"role": "system", '
+                                                       '"content": "{{system_prompt}}"}, {"role": "user", '
+                                                       '"content": "{{prompt}}"}]}',
+                                      "response_path": "choices.0.message.content"}, prompt="go")
+        check("custom JSON: {{model}} and {{system_prompt}} are filled in and JSON-escaped",
+              custom.get("ok") and f"system={sysp}" in custom.get("reply", ""), json.dumps(custom)[:300])
+
+        for name, over, needle in [
+            ("a model name is required", {"model": ""}, "model name"),
+            ("a ws URL is refused", {"url": f"ws://127.0.0.1:{HTTP_PORT}/ws"}, "http or https"),
+            ("an SSE stream URL is refused", {"stream_url": "http://x/s"}, "SSE stream URL"),
+            ("an unknown placeholder is refused by name",
+             {"api_format": "custom", "body_template": '{"x": "{{foo}}"}'}, "{{foo}}"),
+        ]:
+            bad = await probe(client, {**mt, **over})
+            check(f"model validation: {name}", not bad.get("ok") and needle in bad.get("error", ""),
+                  json.dumps(bad)[:200])
+        ep = await probe(client, {"url": SCHEMES["http"][0], "body_template": '{"m": "{{model}}"}'})
+        check("an endpoint target still refuses the model placeholders",
+              not ep.get("ok") and "{{model}}" in ep.get("error", ""), json.dumps(ep)[:200])
+
+        cres = await client.post("/api/scans", json=base_payload(
+            relay_url, mt, strategy={"name": "crescendo", "max_turns": 3}))
+        check("crescendo is refused for a model target", cres.status_code == 400
+              and "single-turn" in cres.text, cres.text[:200])
+        cres = await client.post("/api/scans", json=base_payload(
+            relay_url, {"url": SCHEMES["http"][0]}, strategy={"name": "crescendo", "max_turns": 3}))
+        check("crescendo is still allowed for an endpoint target", cres.status_code == 200, cres.text[:200])
+
+        relay.turns_per_session = 2  # Red sends two turns: each must still arrive on its own
+        echo.state.model_requests.clear()
+        run = await run_scan(client, base_payload(relay_url, mt, target_name="sft-model"))
+        relay.turns_per_session = 1
+        reqs = echo.state.model_requests
+        check("a static scan against a model target completes",
+              run["status"] == "done" and len((run.get("results") or {}).get("results") or []) == 2,
+              json.dumps(run)[:300])
+        check("every attack is single-turn: system + one user message, no history",
+              len(reqs) == 4 and all([m["role"] for m in r["messages"]] == ["system", "user"] for r in reqs),
+              json.dumps([[m["role"] for m in r["messages"]] for r in reqs]))
+        gt = next((t.get("groundTruth") or {} for t in relay.targets.values() if t["name"] == "sft-model"), {})
+        check("the model's system prompt is the judge's ground truth", gt.get("systemPrompt") == sysp,
+              json.dumps(gt)[:200])
+        await run_scan(client, base_payload(relay_url, mt, target_name="sft-model-own-gt",
+                                            system_prompt_as_ground_truth=False))
+        gt = next((t.get("groundTruth") or {} for t in relay.targets.values()
+                   if t["name"] == "sft-model-own-gt"), {})
+        check("unticked, the ground truth field is kept as entered",
+              gt.get("systemPrompt") == "You are a bot.", json.dumps(gt)[:200])
+
+        print("\n[12] agent threat modeling (SDK 0.12): generated objectives")
+        check("scans without the option never touch threat modeling", relay.atm_calls == [],
+              str(relay.atm_calls))
+        sent_ids = lambda run: relay.scans.get(run.get("scan_id"), {}).get("body", {}).get("objectiveIds") or []
+        logs = lambda run: " | ".join(l["message"] for l in run.get("logs", []))
+
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="atm-agent",
+                                                  objectives=two_objs, threat_model=True))
+        gen_keys = [k for k in sent_ids(run) if k.startswith("generated.")]
+        check("threat modeling: the scan completes with the generated objectives added",
+              run["status"] == "done" and sent_ids(run)[:2] == two_objs and len(gen_keys) == 2,
+              json.dumps(sent_ids(run)) + " " + (run.get("error") or ""))
+        calls = relay.atm_calls
+        check("threat modeling: no stored topology, so it is inferred, then objectives generated",
+              "infer" in calls and "generate" in calls and calls.index("infer") < calls.index("generate"),
+              str(calls))
+        check("threat modeling: every objective gets a result",
+              len((run.get("results") or {}).get("results") or []) == 4, json.dumps(run.get("results"))[:200])
+        check("threat modeling: generated objectives are named for the UI",
+              set(run.get("objective_names") or {}) == set(gen_keys)
+              and all(n.startswith("Weakness:") for n in run["objective_names"].values()),
+              json.dumps(run.get("objective_names")))
+        check("threat modeling: the run log lists the generated objectives",
+              "threat model: 2 generated objective(s)" in logs(run), logs(run)[-300:])
+
+        relay.atm_calls.clear()
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="atm-agent",
+                                                  objectives=two_objs, threat_model=True))
+        check("threat modeling: a current topology is reused, not inferred again",
+              run["status"] == "done" and "infer" not in relay.atm_calls
+              and "get-generated" in relay.atm_calls and len(sent_ids(run)) == 4, str(relay.atm_calls))
+
+        relay.atm_calls.clear()
+        run = await run_scan(client, base_payload(
+            relay_url, http_target, target_name="atm-agent", objectives=two_objs, threat_model=True,
+            ground_truth={"system_prompt": "You are a changed bot.", "tools": ['{"name":"lookup"}']}))
+        check("threat modeling: a ground-truth change makes the topology stale and it is re-inferred",
+              run["status"] == "done" and "infer" in relay.atm_calls and "out of date" in logs(run),
+              str(relay.atm_calls))
+
+        relay.atm_calls.clear()
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="atm-agent",
+                                                  objectives=two_objs, threat_model=True,
+                                                  refresh_threat_model=True))
+        check("threat modeling: Re-infer forces a fresh topology", run["status"] == "done"
+              and relay.atm_calls[:2] == ["infer", "generate"], str(relay.atm_calls))
+
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="atm-agent",
+                                                  objectives=[], threat_model=True))
+        check("threat modeling: with no selection, every catalogue objective still runs",
+              run["status"] == "done" and len(sent_ids(run)) == 23 + 2
+              and sent_ids(run)[0] == app_module.OBJECTIVES[0][0], str(len(sent_ids(run))))
+
+        run = await run_scan(client, base_payload(relay_url, mt, target_name="atm-model",
+                                                  threat_model=True))
+        check("threat modeling works for a model API target too",
+              run["status"] == "done" and any(k.startswith("generated.") for k in sent_ids(run)),
+              (run.get("error") or "")[:200])
+
+        relay.atm_enabled = False
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="atm-off",
+                                                  threat_model=True))
+        relay.atm_enabled = True
+        check("threat modeling not enabled: the run fails and says why, nothing silently skipped",
+              run["status"] == "error" and "agent threat modeling failed" in (run.get("error") or "")
+              and "enabled" in run["error"] and run.get("scan_id") is None, (run.get("error") or "")[:300])
+
+        smoke = await client.post("/api/scans", json=base_payload(
+            relay_url, http_target, strategy={"name": "smoke"}, threat_model=True))
+        check("threat modeling with smoke is refused", smoke.status_code == 400
+              and "smoke" in smoke.text, smoke.text[:200])
+        bare = await client.post("/api/scans", json=base_payload(
+            relay_url, http_target, ground_truth={"system_prompt": "", "tools": []}, threat_model=True))
+        check("threat modeling without ground truth is refused before the run",
+              bare.status_code == 400 and "ground truth" in bare.text, bare.text[:200])
 
     finally:
         await client.aclose()
