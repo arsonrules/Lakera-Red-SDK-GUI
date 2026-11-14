@@ -335,6 +335,9 @@ The server suite runs against real local servers and a mock relay. It covers:
 
 - the Red API check: key accepted, key rejected, unreachable, not the Red API, and bad
   input refused without echoing the key;
+- credential isolation: only the Red key (or `LAKERA_RED_API_KEY`) authenticates to Red,
+  no target credential can stand in for it or reach Red, and the Red key never reaches
+  the target;
 - all transport and auth combinations, and certificate trust (self-signed, private CA,
   supplied bundle, wrong bundle, missing bundle, and https and wss agreeing on the verdict);
 - CA bundle handling: directories, mixed PEM and DER, uploads, path containment, and

@@ -42,6 +42,7 @@ from targets import TargetConfig, extract, open_session
 from tls_doctor import read_ca_pems
 
 HTTP_PORT, TLS_PORT, RELAY_PORT, CA_PORT = 8801, 8802, 8803, 8804
+ISO_TARGET_PORT, ISO_RELAY_PORT = 8805, 8806   # credential isolation gets its own pair
 BEARER, API_KEY, USER, PASSWORD = "tok-bearer-123", "key-abc-789", "alice", "s3cr3t"
 BAD_RED_KEY = "revoked-red-key"
 
@@ -567,6 +568,14 @@ async def probe(client: httpx.AsyncClient, target: dict[str, Any], prompt="ping"
     return res.json()
 
 
+def record_headers(app_obj: FastAPI, sink: list[str]) -> None:
+    """Append every request's headers, flattened to one line, to sink."""
+    @app_obj.middleware("http")
+    async def grab(request: Request, call_next):
+        sink.append(" ".join(f"{k}:{v}" for k, v in request.headers.items()))
+        return await call_next(request)
+
+
 async def run_scan(client: httpx.AsyncClient, payload: dict[str, Any], timeout=120) -> dict[str, Any]:
     res = await client.post("/api/scans", json=payload, timeout=30)
     if res.status_code != 200:
@@ -992,6 +1001,83 @@ async def main() -> int:
                 del os.environ["LAKERA_RED_API_KEY"]
             check("a blank key falls back to LAKERA_RED_API_KEY", via_env.get("ok") is True,
                   json.dumps(via_env)[:220])
+
+        print("\n[8c] credential isolation: only the Red key authenticates to Red")
+        # A fresh relay and target, so stray traffic from earlier runs can't muddy what each saw.
+        red_seen: list[str] = []
+        target_seen: list[str] = []
+        iso_relay = MockRelay()
+        iso_relay_app = FastAPI()
+        iso_relay_app.include_router(iso_relay.router())
+        record_headers(iso_relay_app, red_seen)
+        iso_echo = build_echo_app()
+        record_headers(iso_echo, target_seen)
+        servers += [await serve(iso_echo, ISO_TARGET_PORT), await serve(iso_relay_app, ISO_RELAY_PORT)]
+        iso_relay_url = f"http://127.0.0.1:{ISO_RELAY_PORT}"
+        iso_chat = f"http://127.0.0.1:{ISO_TARGET_PORT}/chat"
+        RED_KEY, ENV_RED_KEY = "RED-KEY-111", "ENV-RED-KEY-999"
+        TGT_SECRETS = {"bearer": "TGT-BEARER-222", "api_key": "TGT-APIKEY-333",
+                       "password": "TGT-PW-444", "extra header": "TGT-EXTRAHDR-555"}
+        iso_targets = {
+            "bearer": {"url": iso_chat, "auth_type": "bearer", "token": TGT_SECRETS["bearer"],
+                       "headers": {"X-Extra": TGT_SECRETS["extra header"]}},
+            "api-key header": {"url": iso_chat, "auth_type": "api_key", "api_key_header": "X-API-Key",
+                               "token": TGT_SECRETS["api_key"]},
+            "basic": {"url": iso_chat, "auth_type": "basic", "username": "alice",
+                      "password": TGT_SECRETS["password"]},
+        }
+        basic_header = "Basic " + base64.b64encode(f"alice:{TGT_SECRETS['password']}".encode()).decode()
+        target_proof = {"bearer": TGT_SECRETS["bearer"], "api-key header": TGT_SECRETS["api_key"],
+                        "basic": basic_header}
+        env_key = os.environ.pop("LAKERA_RED_API_KEY", None)
+        try:
+            for name, t in iso_targets.items():
+                res = await client.post("/api/scans", json=base_payload(iso_relay_url, t, api_key=""))
+                check(f"no Red key: a target {name} credential cannot stand in for it (400)",
+                      res.status_code == 400 and "No Red API key" in res.text, res.text[:200])
+            res = await client.post("/api/red-check", json={
+                "api_key": "", "base_url": iso_relay_url, "token": TGT_SECRETS["bearer"],
+                "target": iso_targets["bearer"]})
+            check("no Red key: Test Red API ignores target fields (400)",
+                  res.status_code == 400 and "No Red API key" in res.text, res.text[:200])
+            check("no Red key: nothing reached Red", not red_seen, red_seen[:2])
+
+            for name, t in iso_targets.items():
+                red_seen.clear()
+                target_seen.clear()
+                snap = await run_scan(client, base_payload(iso_relay_url, t, api_key=RED_KEY))
+                to_red, to_target = "\n".join(red_seen), "\n".join(target_seen)
+                check(f"{name} target: scan completes", snap.get("status") == "done", snap.get("error"))
+                check(f"{name} target: every Red request carries only the Red key",
+                      bool(red_seen) and all(f"authorization:Bearer {RED_KEY}" in h for h in red_seen),
+                      to_red[:220])
+                check(f"{name} target: no target secret reaches Red",
+                      not any(v in to_red for v in TGT_SECRETS.values()) and "Basic " not in to_red,
+                      to_red[:220])
+                check(f"{name} target: the Red key never reaches the target", RED_KEY not in to_target,
+                      to_target[:220])
+                check(f"{name} target: the target gets its own credential", target_proof[name] in to_target,
+                      to_target[:220])
+
+            os.environ["LAKERA_RED_API_KEY"] = ENV_RED_KEY
+            red_seen.clear()
+            target_seen.clear()
+            snap = await run_scan(client, base_payload(iso_relay_url, iso_targets["bearer"], api_key=""))
+            check("env key: a blank field authenticates to Red with LAKERA_RED_API_KEY",
+                  snap.get("status") == "done" and bool(red_seen)
+                  and all(f"authorization:Bearer {ENV_RED_KEY}" in h for h in red_seen),
+                  "\n".join(red_seen)[:220])
+            check("env key: it never reaches the target", ENV_RED_KEY not in "\n".join(target_seen))
+            red_seen.clear()
+            res = (await client.post("/api/red-check", json={"api_key": RED_KEY,
+                                                             "base_url": iso_relay_url})).json()
+            check("env key: a key typed in the field takes precedence",
+                  res.get("ok") is True and any(f"Bearer {RED_KEY}" in h for h in red_seen)
+                  and not any(ENV_RED_KEY in h for h in red_seen), red_seen[:2])
+        finally:
+            os.environ.pop("LAKERA_RED_API_KEY", None)
+            if env_key is not None:
+                os.environ["LAKERA_RED_API_KEY"] = env_key
 
         print("\n[9] SSE targets: message.StreamToken -> /stream/{StreamToken} -> content chunks")
         sse_chat = f"http://127.0.0.1:{HTTP_PORT}/sse-chat"
