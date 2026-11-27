@@ -401,6 +401,11 @@ are validated, normalised to PEM (DER is accepted) and stored under `ca_store/`.
 .venv/bin/python test_all.py
 ```
 
+GitHub Actions runs it on every pull request and push to `main`
+([`.github/workflows/tests.yml`](.github/workflows/tests.yml)), and it can be started by hand
+from the Actions tab. It needs only `requirements.txt` and the `openssl` CLI. No Lakera key
+is involved.
+
 The server suite runs against real local servers and a mock relay. It covers:
 
 - the Red API check: key accepted, key rejected, unreachable, not the Red API, and bad

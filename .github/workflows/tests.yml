@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server tests (test_all.py)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"  # stream progress, so a hang shows where it stopped
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      # Starts its own mock Red relay and targets on 127.0.0.1:8801-8806 and makes its
+      # certificates with the openssl CLI; needs no Lakera key or network access to Lakera.
+      - name: Run the server test suite
+        run: python test_all.py
