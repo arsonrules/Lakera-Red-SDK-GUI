@@ -939,6 +939,11 @@ async def main() -> int:
         page = await client.get("/")
         check("UI page served", page.status_code == 200 and "Lakera Red Runner" in page.text,
               str(page.status_code))
+        flat = lambda s: " ".join(s.split())
+        for name in ("runner-architecture", "trp-sequence"):
+            doc = (Path(__file__).parent / "docs" / "diagrams" / f"{name}.html").read_text()
+            check(f"How it works shows docs/diagrams/{name}.html unchanged",
+                  flat(re.search(r"<svg .*?</svg>", doc, re.S)[0]) in flat(page.text))
         check("404 for an unknown run", (await client.get("/api/scans/nope")).status_code == 404)
 
         started = await client.post("/api/scans", json=base_payload(

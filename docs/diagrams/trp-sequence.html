@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How a tool-response-poisoning attack runs</title>
+  <!-- Skin: Lakera Red Runner UI tokens (static/index.html, light theme). Font source: system. -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f6f8fa;
+      --color-ink:     #1f2328;
+      --color-muted:   #59636e;
+      --color-accent:  #cf222e;
+      --font-sans:     ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --font-serif:    'Instrument Serif', ui-serif, Georgia, serif;
+      --font-mono:     ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; min-width: 0; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · Lakera Red Runner</p>
+    <h1>How a tool-response-poisoning attack runs</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 724" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="trp-sequence-title trp-sequence-desc">
+        <title id="trp-sequence-title">How a tool-response-poisoning attack runs</title>
+        <desc id="trp-sequence-desc">One tool-response-poisoning attack, repeated per attack. Turn 1: Red sends a greeting for session S; the runner forwards it to your agent with S in the session_id placeholder and returns the reply with S, which binds S to the scan. Turn 2: Red sends a trigger request; your agent calls a tool, whose intercept_tool wrapper reports the tool event with S to Red. Red answers with a poisoned tool result, which the tool hands back to your agent; your agent's reply goes back through the runner to Red, which judges it.</desc>
+        <defs>
+          <marker id="trp-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#59636e"/></marker>
+          <marker id="trp-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#cf222e"/></marker>
+          <marker id="trp-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0969da"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f6f8fa"/>
+
+        <!-- LOOP fragment: one pass per attack, each its own session S -->
+        <rect x="48" y="120" width="596" height="496" rx="4"
+              fill="rgba(31,35,40,0.02)" stroke="rgba(31,35,40,0.22)" stroke-width="1"/>
+        <rect x="48" y="120" width="40" height="16" rx="2"
+              fill="#f6f8fa" stroke="rgba(31,35,40,0.22)" stroke-width="1"/>
+        <text x="68" y="132" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+        <text x="60" y="152" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+              letter-spacing="0.04em">[each attack]</text>
+
+        <!-- Lifelines: Runner 136 · Your agent 296 · Your tool 456 · Lakera Red 616 -->
+        <line x1="136" y1="96" x2="136" y2="640" stroke="rgba(31,35,40,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="296" y1="96" x2="296" y2="640" stroke="rgba(31,35,40,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="456" y1="96" x2="456" y2="640" stroke="rgba(31,35,40,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="616" y1="96" x2="616" y2="640" stroke="rgba(31,35,40,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- Activation bars -->
+        <rect x="132" y="184" width="8" height="108" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <rect x="132" y="340" width="8" height="252" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <rect x="292" y="220" width="8" height="36" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <rect x="292" y="376" width="8" height="180" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <rect x="452" y="412" width="8" height="108" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <rect x="612" y="448" width="8" height="36" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+
+        <!-- Turn 1: greeting, which binds S -->
+        <!-- M1: Red -> Runner -->
+        <line x1="616" y1="184" x2="140" y2="184" stroke="#59636e" stroke-width="1.2" marker-end="url(#trp-arrow)"/>
+        <rect x="340" y="164" width="76" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="378" y="173" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">1 · GREETING</text>
+        <!-- M2: Runner -> Agent -->
+        <line x1="140" y1="220" x2="292" y2="220" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <rect x="178" y="200" width="76" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="216" y="209" fill="#0969da" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">GREETING + S</text>
+        <!-- M3: Agent -> Runner (return) -->
+        <line x1="292" y1="256" x2="140" y2="256" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#trp-arrow)"/>
+        <rect x="198" y="236" width="36" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="216" y="245" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">REPLY</text>
+        <!-- M4: Runner -> Red, carries sessionId S -->
+        <line x1="140" y1="292" x2="616" y2="292" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <rect x="334" y="272" width="88" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="378" y="281" fill="#0969da" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">REPLY · BIND S</text>
+
+        <!-- Turn 2: trigger, tool call, poisoned result -->
+        <!-- M5: Red -> Runner -->
+        <line x1="616" y1="340" x2="140" y2="340" stroke="#59636e" stroke-width="1.2" marker-end="url(#trp-arrow)"/>
+        <rect x="344" y="320" width="68" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="378" y="329" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">2 · TRIGGER</text>
+        <!-- M6: Runner -> Agent -->
+        <line x1="140" y1="376" x2="292" y2="376" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <rect x="182" y="356" width="68" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="216" y="365" fill="#0969da" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">TRIGGER + S</text>
+        <!-- M7: Agent -> Tool -->
+        <line x1="300" y1="412" x2="452" y2="412" stroke="#59636e" stroke-width="1.2" marker-end="url(#trp-arrow)"/>
+        <rect x="346" y="392" width="60" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="376" y="401" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">CALL TOOL</text>
+        <!-- M8: Tool -> Red, intercept_tool reports the event with S -->
+        <line x1="460" y1="448" x2="612" y2="448" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <rect x="492" y="428" width="88" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="536" y="437" fill="#0969da" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">TOOL EVENT · S</text>
+        <!-- M9: Red -> Tool, the poisoned result (headline) -->
+        <line x1="612" y1="484" x2="460" y2="484" stroke="#cf222e" stroke-width="1.4" marker-end="url(#trp-arrow-accent)"/>
+        <rect x="510" y="464" width="52" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="536" y="473" fill="#cf222e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">POISONED</text>
+        <!-- M10: Tool -> Agent (return) -->
+        <line x1="452" y1="520" x2="300" y2="520" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#trp-arrow)"/>
+        <rect x="342" y="500" width="68" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="376" y="509" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">TOOL RESULT</text>
+        <!-- M11: Agent -> Runner (return) -->
+        <line x1="292" y1="556" x2="140" y2="556" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#trp-arrow)"/>
+        <rect x="198" y="536" width="36" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="216" y="545" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">REPLY</text>
+        <!-- M12: Runner -> Red -->
+        <line x1="140" y1="592" x2="616" y2="592" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <rect x="338" y="572" width="80" height="12" rx="2" fill="#f6f8fa"/>
+        <text x="378" y="581" fill="#0969da" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.06em">REPLY · JUDGE</text>
+
+        <!-- Actor: Runner (backend) -->
+        <rect x="72" y="40" width="128" height="56" rx="6" fill="#f6f8fa"/>
+        <rect x="72" y="40" width="128" height="56" rx="6" fill="#ffffff" stroke="#1f2328" stroke-width="1"/>
+        <rect x="80" y="46" width="28" height="12" rx="2" fill="transparent" stroke="rgba(31,35,40,0.40)" stroke-width="0.8"/>
+        <text x="94" y="55" fill="#1f2328" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">SDK</text>
+        <text x="136" y="74" fill="#1f2328" font-size="12" font-weight="600" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">Runner</text>
+        <text x="136" y="88" fill="#59636e" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">app.py · targets.py</text>
+
+        <!-- Actor: Your agent (external) -->
+        <rect x="232" y="40" width="128" height="56" rx="6" fill="#f6f8fa"/>
+        <rect x="232" y="40" width="128" height="56" rx="6" fill="rgba(31,35,40,0.03)" stroke="rgba(31,35,40,0.30)" stroke-width="1"/>
+        <rect x="240" y="46" width="40" height="12" rx="2" fill="transparent" stroke="rgba(31,35,40,0.22)" stroke-width="0.8"/>
+        <text x="260" y="55" fill="#59636e" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">TARGET</text>
+        <text x="296" y="74" fill="#1f2328" font-size="12" font-weight="600" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">Your agent</text>
+        <text x="296" y="88" fill="#59636e" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">http or ws</text>
+
+        <!-- Actor: Your tool (external, in the agent's runtime) -->
+        <rect x="392" y="40" width="128" height="56" rx="6" fill="#f6f8fa"/>
+        <rect x="392" y="40" width="128" height="56" rx="6" fill="rgba(31,35,40,0.03)" stroke="rgba(31,35,40,0.30)" stroke-width="1"/>
+        <rect x="400" y="46" width="32" height="12" rx="2" fill="transparent" stroke="rgba(31,35,40,0.22)" stroke-width="0.8"/>
+        <text x="416" y="55" fill="#59636e" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">TOOL</text>
+        <text x="456" y="74" fill="#1f2328" font-size="12" font-weight="600" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">Your tool</text>
+        <text x="456" y="88" fill="#59636e" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">intercept_tool</text>
+
+        <!-- Actor: Lakera Red API (external) -->
+        <rect x="552" y="40" width="128" height="56" rx="6" fill="#f6f8fa"/>
+        <rect x="552" y="40" width="128" height="56" rx="6" fill="rgba(31,35,40,0.03)" stroke="rgba(31,35,40,0.30)" stroke-width="1"/>
+        <rect x="560" y="46" width="32" height="12" rx="2" fill="transparent" stroke="rgba(31,35,40,0.22)" stroke-width="0.8"/>
+        <text x="576" y="55" fill="#59636e" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">SAAS</text>
+        <text x="616" y="74" fill="#1f2328" font-size="12" font-weight="600" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">Lakera Red API</text>
+        <text x="616" y="88" fill="#59636e" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">/relay/*</text>
+
+        <!-- Callout 1: where S comes from and when it is bound -->
+        <text x="672" y="276" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">S is Red's id for the session.</text>
+        <text x="672" y="294" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">Your agent gets it in {{session_id}},</text>
+        <text x="672" y="312" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">and the first reply binds it.</text>
+        <path d="M 666,289 Q 646,292 626,292" fill="none" stroke="rgba(31,35,40,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <circle cx="624" cy="292" r="2" fill="#1f2328"/>
+
+        <!-- Callout 2: what Red does with the tool event -->
+        <text x="672" y="452" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">Red finds the scan by S and plants</text>
+        <text x="672" y="470" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">its payload in the first text result,</text>
+        <text x="672" y="488" fill="#1f2328" font-size="14" font-style="italic" font-family="'Instrument Serif', ui-serif, Georgia, serif">then judges the reply and tool calls.</text>
+        <path d="M 666,465 Q 646,466 628,466" fill="none" stroke="rgba(31,35,40,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <circle cx="626" cy="466" r="2" fill="#1f2328"/>
+
+        <!-- Legend strip -->
+        <line x1="40" y1="664" x2="920" y2="664" stroke="rgba(31,35,40,0.10)" stroke-width="0.8"/>
+        <text x="40" y="680" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.18em">LEGEND</text>
+        <text x="920" y="680" fill="#59636e" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="end">Red's turns reach the runner through its outbound poll</text>
+
+        <line x1="40" y1="697" x2="68" y2="697" stroke="#0969da" stroke-width="1.2" marker-end="url(#trp-arrow-link)"/>
+        <text x="76" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">HTTP call</text>
+
+        <line x1="152" y1="697" x2="180" y2="697" stroke="#59636e" stroke-width="1.2" marker-end="url(#trp-arrow)"/>
+        <text x="188" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Attack turn or call</text>
+
+        <line x1="300" y1="697" x2="328" y2="697" stroke="#59636e" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#trp-arrow)"/>
+        <text x="336" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Reply</text>
+
+        <line x1="392" y1="697" x2="420" y2="697" stroke="#cf222e" stroke-width="1.4" marker-end="url(#trp-arrow-accent)"/>
+        <text x="428" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Poisoned tool result</text>
+
+        <rect x="548" y="688" width="28" height="18" rx="2" fill="rgba(31,35,40,0.02)" stroke="rgba(31,35,40,0.22)" stroke-width="1"/>
+        <text x="562" y="700" fill="#59636e" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">LOOP</text>
+        <text x="584" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Repeats per attack</text>
+
+        <rect x="700" y="690" width="8" height="14" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
+        <text x="716" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Busy with a request</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
