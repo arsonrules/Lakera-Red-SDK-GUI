@@ -123,6 +123,13 @@ many are selected. None selected means all objectives run. Smoke scans ignore th
 - **Results:** a verdict summary, a table you can sort and filter, and a row to expand for
   the explanation and the full conversation. **Export** writes JSON, CSV or a Markdown
   report from the results on the page.
+- **How it works:** two diagrams that follow the light or dark theme. **Architecture** shows
+  how a scan moves through the runner. **Scenario: tool-response poisoning** walks one
+  indirect attack from greeting to judged reply. Its **Set up this scan** button switches
+  the form to that strategy, keeping what you've filled in. It switches a model API target to a chat
+  endpoint, adds an example objective if you have none, and sends `{{session_id}}` in an
+  `X-Session-Id` header unless the body or headers already carry it. Standalone copies live in
+  [`docs/diagrams/`](docs/diagrams/), and `test_all.py` fails if the two drift apart.
 
 A reload during a scan reattaches to it. If the connection to the server drops, a banner
 says so and offers the run in **Recent runs**.
@@ -425,9 +432,10 @@ The server suite runs against real local servers and a mock relay. It covers:
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
 phone width, accessibility basics, field checks, the Red API test, the connection test, TLS diagnosis,
-saved configs and templates, the objective picker, tool-response poisoning, runs,
-results, export, history and reattach, and the theme. It needs `demo_servers.py` running. Serve the file, load the
-page, and run this in the browser console:
+saved configs and templates, the objective picker, tool-response poisoning, How it works
+and its Set up this scan button, runs, results, export, history and reattach, and the
+theme. It needs `demo_servers.py` running. Serve the file, load the page, and run this in
+the browser console:
 
 ```js
 const s = document.createElement("script");
