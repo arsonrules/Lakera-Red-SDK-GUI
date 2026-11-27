@@ -22,6 +22,7 @@ import json
 import os
 import re
 import ssl
+import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -71,7 +72,7 @@ class TargetConfig:
     password: str = ""        # basic
     api_key_header: str = "X-API-Key"
     method: str = "POST"      # http only
-    body_template: str = ""   # {{prompt}} / {{messages}} placeholders
+    body_template: str = ""   # {{prompt}} / {{messages}} / {{session_id}} placeholders
     response_path: str = ""   # dot path into the JSON reply, e.g. choices.0.message.content
     stream_url: str = ""      # SSE endpoint; set = the reply streams via message.StreamToken
     headers: dict[str, str] = field(default_factory=dict)
@@ -93,6 +94,12 @@ class TargetConfig:
             return MODEL_FORMATS[self.api_format][0]
         return self.body_template or (DEFAULT_HTTP_BODY if self.scheme in ("http", "https")
                                       else DEFAULT_WS_BODY)
+
+    @property
+    def sends_session_id(self) -> bool:
+        """Whether the target is told each session's id, so its traced tool calls can join it."""
+        return "{{session_id}}" in self.template or any(
+            "{{session_id}}" in v for v in self.headers.values())
 
     @property
     def reply_path(self) -> str:
@@ -119,8 +126,8 @@ class TargetConfig:
         if self.ca_bundle and not Path(self.ca_bundle).exists():
             raise ValueError(f"CA bundle not found: {self.ca_bundle}")
         # _render fills in only these, so any other {{...}} would reach the target verbatim.
-        known = (("prompt", "messages", "model", "system_prompt") if self.kind == "model"
-                 else ("prompt", "messages"))
+        known = (("prompt", "messages", "session_id", "model", "system_prompt")
+                 if self.kind == "model" else ("prompt", "messages", "session_id"))
         for name in re.findall(r"\{\{([^{}]*)\}\}", self.template):
             if name not in known:
                 raise ValueError(f"unknown placeholder {{{{{name}}}}} in the request body — only "
@@ -163,14 +170,14 @@ def auth_headers(cfg: TargetConfig) -> dict[str, str]:
 
 
 def _render(template: str, prompt: str, messages: list[dict[str, str]],
-            cfg: TargetConfig | None = None) -> str:
+            cfg: TargetConfig | None = None, session_id: str = "") -> str:
     # json.dumps(...)[1:-1] escapes a value for interpolation inside a JSON string literal.
     text = lambda v: json.dumps(v)[1:-1]
-    body = template.replace("{{prompt}}", text(prompt)).replace("{{messages}}", json.dumps(messages))
+    values = {"prompt": text(prompt), "messages": json.dumps(messages), "session_id": text(session_id)}
     if cfg is not None:
-        body = body.replace("{{model}}", text(cfg.model)).replace(
-            "{{system_prompt}}", text(cfg.system_prompt))
-    return body
+        values |= {"model": text(cfg.model), "system_prompt": text(cfg.system_prompt)}
+    # One pass, so an attack that itself contains {{...}} reaches the target verbatim.
+    return re.sub(r"\{\{(\w+)\}\}", lambda m: values.get(m[1], m[0]), template)
 
 
 def _model_turn(cfg: TargetConfig, prompt: str) -> tuple[str, list[dict[str, str]]]:
@@ -530,7 +537,7 @@ def explain_tls_failure(exc: BaseException, cfg: TargetConfig) -> str | None:
 
 
 @asynccontextmanager
-async def open_session(cfg: TargetConfig):
+async def open_session(cfg: TargetConfig, session_id: str = ""):
     """Yield an async `chat(prompt, on_chunk=None) -> reply` bound to one conversation.
 
     Multi-turn history is kept per session so crescendo scans escalate against a
@@ -541,10 +548,13 @@ async def open_session(cfg: TargetConfig):
     stream lives (and is required for a ws target, whose reply names only the token).
     on_chunk sees each piece of text as it lands, the joined text is what chat returns,
     and trace collects the hand-off steps for the connection test.
+    {{session_id}} in the body or a header value becomes session_id (a fresh one if unset).
     """
     cfg.validate()
     history: list[dict[str, str]] = []
-    headers = {**auth_headers(cfg), **cfg.headers}
+    sid = session_id or uuid.uuid4().hex
+    headers = {**auth_headers(cfg),
+               **{k: v.replace("{{session_id}}", sid) for k, v in cfg.headers.items()}}
 
     template = cfg.template
     if cfg.scheme in ("http", "https"):
@@ -554,12 +564,12 @@ async def open_session(cfg: TargetConfig):
                            trace: list[str] | None = None) -> str:
                 if cfg.kind == "model":  # single-turn: each attack stands alone
                     sent, messages = _model_turn(cfg, prompt)
-                    body = _render(template, sent, messages, cfg)
+                    body = _render(template, sent, messages, cfg, sid)
                     _note(trace, f"model {cfg.model or '(none)'} · {cfg.api_format} · system prompt "
                                  f"{len(cfg.system_prompt)} chars · single-turn")
                 else:
                     history.append({"role": "user", "content": prompt})
-                    body = _render(template, prompt, history)
+                    body = _render(template, prompt, history, session_id=sid)
                 res = await client.request(
                     cfg.method.upper(),
                     cfg.url,
@@ -595,7 +605,7 @@ async def open_session(cfg: TargetConfig):
         async def chat(prompt: str, on_chunk: Callable[[str], object] | None = None,
                        trace: list[str] | None = None) -> str:
             history.append({"role": "user", "content": prompt})
-            body = _render(template, prompt, history)
+            body = _render(template, prompt, history, session_id=sid)
             await ws.send(body)
             raw = await ws.recv()
             if isinstance(raw, bytes):

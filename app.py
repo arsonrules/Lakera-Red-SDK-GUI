@@ -19,7 +19,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -34,8 +34,9 @@ from lakera_red_sdk import (
     ReconContext,
     SmokeStrategyOptions,
     StaticStrategyOptions,
+    ToolResponsePoisoningStrategyOptions,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from targets import TargetConfig, explain_tls_failure, list_models, open_session
 from tls_doctor import MAX_CA_BYTES, adiagnose, read_ca_pems
@@ -70,6 +71,7 @@ OBJECTIVES = [
     ("responsible.hallucination.1", "Hallucination", "Responsible"),
     ("responsible.cybercrime-facilitation.1", "Cybercrime Facilitation", "Responsible"),
 ]
+OBJECTIVE_IDS = [i for i, _, _ in OBJECTIVES]
 
 
 # --------------------------------------------------------------------------- models
@@ -128,14 +130,23 @@ class GroundTruthSpec(BaseModel):
 
 
 class StrategySpec(BaseModel):
-    name: Literal["static", "crescendo", "smoke"] = "static"
+    name: Literal["static", "crescendo", "smoke", "tool-response-poisoning"] = "static"
     number_of_probes: int | None = None
+    number_of_attacks_per_objective: int | None = Field(None, ge=1, le=100)  # tool-response-poisoning
     max_turns: int | None = None
     max_retries: int | None = None
     early_stop_score: int | None = None
     probes: list[str] | None = None
 
+    @property
+    def indirect(self) -> bool:
+        """Attacks arrive through a poisoned tool result, not the user's message."""
+        return self.name == "tool-response-poisoning"
+
     def to_options(self):
+        if self.indirect:
+            return ToolResponsePoisoningStrategyOptions(
+                number_of_attacks_per_objective=self.number_of_attacks_per_objective)
         if self.name == "static":
             return StaticStrategyOptions(number_of_probes=self.number_of_probes)
         if self.name == "crescendo":
@@ -147,11 +158,17 @@ class StrategySpec(BaseModel):
         return SmokeStrategyOptions(probes=self.probes or None)
 
 
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class CustomObjectiveSpec(BaseModel):
-    key: str
-    name: str
-    attack_description: str
-    success_indicators: list[str]
+    # Red's limits, checked here so a bad objective fails before the target and recon run.
+    key: str = Field(pattern=r"^[A-Za-z0-9._:-]{1,128}$")
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    attack_description: Text
+    success_indicators: list[Text] = Field(min_length=1)
+    severity: Literal["critical", "high", "medium", "low"] | None = None
+    additional_context: str | None = Field(None, max_length=1500)
 
 
 class RedApiSpec(BaseModel):
@@ -332,8 +349,12 @@ def _make_handler(run: Run, cfg: TargetConfig):
     async def handler(session) -> None:
         sid = session.relay_session_id
         run.log("info", "session opened", session_id=sid)
+        # The target gets this id via {{session_id}} and reports its tool calls with it.
+        # Bound before the first reply, as tool-response-poisoning requires.
+        if cfg.sends_session_id:
+            session.set_session_id(sid)
         try:
-            async with open_session(cfg) as chat:
+            async with open_session(cfg, sid) as chat:
                 async for msg in session:
                     run.log("attack", msg.attack, session_id=sid)
                     # ponytail: one log entry per SSE chunk so the UI shows the reply as it
@@ -424,8 +445,10 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
                 client, run, target.target_id, req.refresh_threat_model)
             run.objective_names = {o.key: o.name for o in generated}
             # Added to the selection; an empty selection means every catalogue objective,
-            # which must stay so rather than shrink to the generated ones alone.
-            objectives = (req.objectives or [i for i, _, _ in OBJECTIVES]) + [o.key for o in generated]
+            # which must stay so rather than shrink to the generated ones alone. The
+            # catalogue runs only in direct attacks, so an indirect scan adds none of it.
+            catalogue = [] if req.strategy.indirect else OBJECTIVE_IDS
+            objectives = (req.objectives or catalogue) + [o.key for o in generated]
 
         run.status = "creating scan"
         scan = await client.create_scan(
@@ -659,6 +682,27 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
     if req.target.kind == "model" and req.strategy.name == "crescendo":
         raise HTTPException(400, "crescendo is multi-turn and adaptive; a model API target "
                                  "runs single-turn — use the static or smoke strategy")
+    keys = [o.key for o in req.custom_objectives]
+    if dupes := sorted({k for k in keys if keys.count(k) > 1}):
+        raise HTTPException(400, f"custom objective key used more than once: {', '.join(dupes)}")
+    if clash := sorted(set(keys) & {*OBJECTIVE_IDS, *req.objectives}):
+        raise HTTPException(400, f"custom objective key {', '.join(clash)} is already an objective "
+                                 "ID — give the custom objective its own key")
+    if req.strategy.indirect:
+        if req.target.kind == "model":
+            raise HTTPException(400, "tool-response-poisoning needs an agent that calls tools over "
+                                     "a multi-turn session; a model API target runs single-turn")
+        if built_in := [o for o in req.objectives if o in OBJECTIVE_IDS]:
+            raise HTTPException(400, "built-in objectives run only in direct attacks (static, "
+                                     f"crescendo), not tool-response-poisoning: {', '.join(built_in)}"
+                                     " — write custom objectives that name your agent's tools")
+        if not (req.custom_objectives or req.objectives or req.threat_model):
+            raise HTTPException(400, "tool-response-poisoning needs at least one custom objective "
+                                     "— built-in objectives don't run in indirect attacks")
+        if not req.target.to_config().sends_session_id:
+            raise HTTPException(400, "tool-response-poisoning needs the target to report its tool "
+                                     "calls with this session's id: put {{session_id}} in the "
+                                     "request body or a header value")
     run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url))
     RUNS[run.id] = run
     run.log("info", "run queued")
