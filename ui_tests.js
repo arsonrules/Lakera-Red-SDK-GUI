@@ -519,6 +519,32 @@ async function uiTests() {
   if (innerWidth <= 900) $("tab-config").click();
   tm.checked = false; fire("threat_model", "change"); set("system_prompt", ""); set("api_key", "");
 
+  // ---- tool-response-poisoning: an indirect attack through a traced tool result
+  pick("strategy", "tool-response-poisoning");
+  check("TRP hides the built-in objectives, shows its options and requires custom objectives",
+    !visible($("builtin_box")) && visible($("trp_obj_note")) && visible($("p_trp"))
+    && /required/.test($("custom_req").textContent));
+  check("the scan summary says custom objectives", /custom objectives/.test($("sec-scan").querySelector(".sum").textContent));
+  set("body_template", ""); set("custom_objectives", "");
+  $("go").click();
+  check("TRP without {{session_id}} or a custom objective is stopped at both fields",
+    invalid("body_template") && msg("body_template").includes("{{session_id}}") && invalid("custom_objectives"),
+    $("form-err").textContent);
+  pick("strategy", "static");
+  check("leaving TRP clears its field messages and shows the built-ins again",
+    !invalid("body_template") && !invalid("custom_objectives") && visible($("builtin_box")));
+  pick("strategy", "tool-response-poisoning");
+  set("body_template", '{"message": "{{prompt}}", "session_id": "{{session_id}}"}');
+  set("custom_objectives", JSON.stringify([{key: "ui.indirect.1", name: "Indirect", severity: "high",
+    attack_description: "Make the agent email data out.", success_indicators: ["The agent calls send_email outside."]}]));
+  set("api_key", "demo");
+  $("go").click();
+  const trpDone = await until(() => FINAL($("status").textContent) && !$("go").disabled, 60000);
+  check("a tool-response-poisoning scan runs the custom objective only",
+    trpDone && $("status").textContent === "done" && resRows().length === 1, `${$("status").textContent} ${resRows().length}`);
+  if (innerWidth <= 900) $("tab-config").click();
+  pick("strategy", "static"); set("body_template", ""); set("custom_objectives", ""); set("api_key", "");
+
   const failed = results.filter(r => !r.ok);
   return { passed: results.length - failed.length, failed: failed.length, failures: failed };
 }

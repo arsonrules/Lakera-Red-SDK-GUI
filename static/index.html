@@ -367,8 +367,7 @@
       <div id="body_box">
       <label for="body_template">Request body template</label>
       <textarea id="body_template" rows="3" placeholder='{"message": "{{prompt}}"}'></textarea>
-      <div class="hint" id="body_hint"><code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full
-        [{role,content}] history (use it for multi-turn crescendo scans).</div>
+      <div class="hint" id="body_hint"></div>
       </div>
       <label for="headers">Extra headers (JSON)</label>
       <textarea id="headers" rows="2" placeholder='{"X-Env": "staging"}'></textarea>
@@ -475,9 +474,10 @@
             <option value="static">static — fixed probes</option>
             <option value="crescendo">crescendo — multi-turn escalation</option>
             <option value="smoke">smoke — canned sanity check</option>
+            <option value="tool-response-poisoning">tool-response-poisoning — indirect, via a tool result</option>
           </select>
-          <div class="hint" id="strategy_note" hidden>crescendo is multi-turn and adaptive, so it is
-            off for a model API target.</div>
+          <div class="hint" id="strategy_note" hidden>crescendo and tool-response-poisoning need a
+            multi-turn agent, so they are off for a model API target.</div>
         </div>
         <div><label for="concurrency">Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
         <div><label for="response_timeout_seconds">Reply timeout (s, 1–480)</label>
@@ -497,8 +497,19 @@
         <label for="probes">Custom probes (one per line, blank = server set)</label>
         <textarea id="probes" rows="2"></textarea>
       </div>
+      <div id="p_trp" hidden>
+        <div class="row">
+          <div><label for="attacks_per_objective">Attacks per objective (1–100)</label>
+            <input type="number" id="attacks_per_objective" value="5" min="1" max="100"></div>
+        </div>
+        <div class="hint">Red asks for a benign task that makes your agent call a tool, then plants
+          instructions in the tool result. Your agent must wrap its tools with the SDK's
+          <code>intercept_tool</code> (with <code>LAKERA_RED_TOOL_INTERCEPT=true</code>) and report
+          with the <code>{{session_id}}</code> it receives in the request body or a header.</div>
+      </div>
       <label for="language">Language</label>
       <select id="language"></select>
+      <div id="builtin_box">
       <label id="objectives-label" for="obj_search">Objectives <span class="hint" style="display:inline">(ignored for smoke)</span></label>
       <div class="objtools">
         <input type="search" id="obj_search" placeholder="Filter objectives" data-no-save>
@@ -506,9 +517,16 @@
       </div>
       <div id="obj_count" aria-live="polite"></div>
       <div class="objectives" id="objectives" role="group" aria-labelledby="objectives-label"></div>
-      <label for="custom_objectives">Custom objectives (JSON array, optional)</label>
+      </div>
+      <div class="hint" id="trp_obj_note" hidden>Built-in objectives run only in direct attacks
+        (static, crescendo). For tool-response-poisoning, define custom objectives that name your
+        agent's tools and data, e.g. "The agent calls send_email with a recipient outside example.com".</div>
+      <label for="custom_objectives">Custom objectives (JSON array<span id="custom_req"> — optional</span>)</label>
       <textarea id="custom_objectives" rows="2"
-        placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."]}]'></textarea>
+        placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."],"severity":"high","additional_context":"..."}]'></textarea>
+      <div class="hint">Key: 1–128 letters, digits, <code>. _ : -</code>, unique. Name up to 200
+        characters. Optional <code>severity</code> (critical, high, medium, low) and
+        <code>additional_context</code> (up to 1500 characters, shapes the attacks, not the scoring).</div>
       <label class="inline"><input type="checkbox" id="threat_model"> Add objectives from agent threat modeling</label>
       <label class="inline" id="refresh_tm_box" hidden><input type="checkbox" id="refresh_threat_model"> Re-infer the topology first</label>
       <div class="hint" id="threat_model_hint">Red infers the target's topology from its ground truth
@@ -645,9 +663,10 @@ const isModel = () => $("target_kind").value === "model";
 // The reply path each preset model API format fills in when Response path is blank.
 const MODEL_PATHS = {openai: "choices.0.message.content", completion: "generated_text"};
 const BODY_HINTS = {
-  endpoint: '<code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full [{role,content}] history (use it for multi-turn crescendo scans).',
+  endpoint: '<code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full [{role,content}] history (use it for multi-turn crescendo scans). <code>{{session_id}}</code> = the id of this session, for an agent that traces its tools (needed for tool-response-poisoning; also works in a header value).',
   model: '<code>{{model}}</code> = model name, <code>{{system_prompt}}</code> = system prompt, <code>{{prompt}}</code> = the attack, <code>{{messages}}</code> = [system, user] for this single turn.',
 };
+const TRP = "tool-response-poisoning", isTrp = () => $("strategy").value === TRP;
 function refresh() {
   const auth = $("auth_type").value, ca = $("ca_mode").value;
   const ws = /^wss?:/i.test($("url").value.trim());
@@ -666,16 +685,23 @@ function refresh() {
   $("response_path").placeholder = preset ? `blank = ${MODEL_PATHS[fmt]}`
     : $("stream_url").value.trim() && !model ? "content — field inside each SSE event (blank = content)"
     : "e.g. choices.0.message.content — blank = whole body";
-  // A model target answers each attack on its own, so the multi-turn adaptive strategy is locked out.
-  $("strategy").querySelector("option[value=crescendo]").disabled = model;
-  if (model && $("strategy").value === "crescendo") $("strategy").value = "static";
+  // A model target answers each attack on its own, so the multi-turn strategies are locked out.
+  ["crescendo", TRP].forEach(v => { $("strategy").querySelector(`option[value=${v}]`).disabled = model; });
+  if (model && ["crescendo", TRP].includes($("strategy").value)) $("strategy").value = "static";
   $("strategy_note").hidden = !model;
-  const strategy = $("strategy").value;
+  const strategy = $("strategy").value, trp = strategy === TRP;
   $("threat_model").disabled = strategy === "smoke";  // smoke ignores objectives
   $("refresh_tm_box").hidden = !$("threat_model").checked || strategy === "smoke";
   $("p_static").hidden = strategy !== "static";
   $("p_crescendo").hidden = strategy !== "crescendo";
   $("p_smoke").hidden = strategy !== "smoke";
+  $("p_trp").hidden = !trp;
+  // Built-in objectives run only in direct attacks: hide them, keep the selection for later.
+  $("builtin_box").hidden = trp;
+  $("trp_obj_note").hidden = !trp;
+  $("custom_req").textContent = trp ? " — required" : " — optional";
+  // Their checks depend on the strategy, so a stale message goes once it changes.
+  ["body_template", "custom_objectives"].forEach(id => $(id).getAttribute("aria-invalid") && checkField(id));
   $("ca_path_box").hidden = ca !== "path";
   $("ca_upload_box").hidden = ca !== "upload";
   updateSummaries();
@@ -709,8 +735,9 @@ const SUMMARIES = {
                         $("app_description").value.trim() ? "described" : "recon"],
   "sec-scan": () => {
     const s = $("strategy").value, n = objBoxes().filter(c => c.checked).length;
-    return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns` : "",
-            n ? `${n} objective(s)` : "all objectives",
+    return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns`
+              : s === TRP ? `${$("attacks_per_objective").value} attack(s)` : "",
+            s === TRP ? "custom objectives" : n ? `${n} objective(s)` : "all objectives",
             $("threat_model").checked && s !== "smoke" ? "+ threat model" : "", $("language").value];
   },
 };
@@ -923,7 +950,8 @@ Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/objectives").
 
 // ---- field checks: the client-side mirror of TargetConfig.validate(), so a value in the
 // wrong field is caught where it was typed instead of as a server error after Run.
-const placeholders = () => isModel() ? ["prompt", "messages", "model", "system_prompt"] : ["prompt", "messages"];
+const placeholders = () => isModel() ? ["prompt", "messages", "session_id", "model", "system_prompt"]
+                                     : ["prompt", "messages", "session_id"];
 const jsonError = (v, ok, message) => {
   if (!v.trim()) return "";
   try { return ok(JSON.parse(v)) ? "" : message; } catch { return "Not valid JSON — " + message; }
@@ -940,12 +968,16 @@ const CHECKS = {
   body_template: v => {
     const known = placeholders();
     const bad = [...v.matchAll(/\{\{([^{}]*)\}\}/g)].map(m => m[1]).filter(n => !known.includes(n));
-    return bad.length ? `Only ${known.map(n => `{{${n}}}`).join(", ")} are filled in — write ${bad.map(n => `{{${n}}}`).join(", ")} as a literal value.` : "";
+    if (bad.length) return `Only ${known.map(n => `{{${n}}}`).join(", ")} are filled in — write ${bad.map(n => `{{${n}}}`).join(", ")} as a literal value.`;
+    return isTrp() && !v.includes("{{session_id}}") && !$("headers").value.includes("{{session_id}}")
+      ? "tool-response-poisoning needs {{session_id}} here or in an extra header value, so the tool calls your agent reports join this session." : "";
   },
   stream_url: v => v && !/^https?:\/\/[^/\s]/i.test(v) ? "The SSE stream URL must be an http or https URL." : "",
   headers: v => jsonError(v, o => o && typeof o === "object" && !Array.isArray(o)
     && Object.values(o).every(x => typeof x === "string"), 'use an object of strings, e.g. {"X-Env": "staging"}.'),
-  custom_objectives: v => jsonError(v, Array.isArray, "use an array of objective objects."),
+  custom_objectives: v => jsonError(v, Array.isArray, "use an array of objective objects.")
+    || (isTrp() && !$("threat_model").checked && !(v && JSON.parse(v).length)
+        ? "tool-response-poisoning needs at least one custom objective — built-in objectives run only in direct attacks." : ""),
 };
 const NOTES = {
   stream_url: v => !v && /^wss?:/i.test($("url").value.trim())
@@ -1234,8 +1266,9 @@ $("form").onsubmit = async ev => {
         max_retries: s === "crescendo" ? +$("max_retries").value : null,
         early_stop_score: s === "crescendo" ? +$("early_stop_score").value : null,
         probes: s === "smoke" ? lines($("probes").value) : null,
+        number_of_attacks_per_objective: s === TRP ? +$("attacks_per_objective").value : null,
       },
-      objectives: objBoxes().filter(c => c.checked).map(c => c.value),
+      objectives: s === TRP ? [] : objBoxes().filter(c => c.checked).map(c => c.value),
       custom_objectives: parseJSON($("custom_objectives").value, []),
       concurrency: +$("concurrency").value,
       language: $("language").value,
@@ -1259,7 +1292,10 @@ $("form").onsubmit = async ev => {
   } catch (e) { r = {ok: false, json: async () => ({detail: e.message})}; }
   if (!r.ok) {
     const detail = (await r.json().catch(() => ({}))).detail || r.status;
-    showBanner("The scan could not start: " + (typeof detail === "string" ? detail : JSON.stringify(detail)));
+    // A field-level rejection (HTTP 422) is a list: show each as "custom_objectives.0.key: why".
+    const why = Array.isArray(detail) ? detail.map(e => `${(e.loc || []).slice(1).join(".")}: ${e.msg}`).join("; ")
+      : typeof detail === "string" ? detail : JSON.stringify(detail);
+    showBanner("The scan could not start: " + why);
     setStatus("idle");
     $("go").disabled = false; return;
   }
