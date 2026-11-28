@@ -996,7 +996,9 @@ async def main() -> int:
               str(len(objectives)))
         cfg = (await client.get("/api/config")).json()
         check("config exposes the default base URL", "lakera" in cfg["base_url"], str(cfg))
-        pinned = re.search(r"lakera-red-sdk~=(\d+\.\d+)", (Path(__file__).parent / "requirements.txt").read_text())[1]
+        # The pin is "lakera-red-sdk~=X.Y.Z" or a direct link to a lakera_red_sdk-X.Y.Z wheel.
+        reqs = [l for l in (Path(__file__).parent / "requirements.txt").read_text().splitlines() if not l.startswith("#")]
+        pinned = re.search(r"lakera.red.sdk(?:~=|-)(\d+\.\d+)", "\n".join(reqs))[1]
         check(f"config reports the installed SDK version (pinned {pinned}.x)",
               cfg.get("sdk_version", "").startswith(pinned + "."), str(cfg))
         page = await client.get("/")
