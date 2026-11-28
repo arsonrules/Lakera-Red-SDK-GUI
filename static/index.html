@@ -2005,6 +2005,10 @@ function renderResults() {
     stat("Lakera Red verdict", h("span", {className: "pill " + o.cls, textContent: o.word})),
     stat("Broken", h("b", {textContent: o.broken})), stat("Held", h("b", {textContent: o.held})),
     stat("Errored / unscored", h("b", {textContent: o.unsure})), stat("Objectives", h("b", {textContent: rows.length})));
+  // An indirect attack can only land through a tool call the agent reported, so "held" is weaker evidence.
+  const trpNote = run.snap?.strategy === TRP && o.held > 0 && h("p", {className: "hint", id: "trp-held-note",
+    textContent: "Tool-response poisoning: Red judges only the tool calls your agent reported with intercept_tool. " +
+      "If it reported none, a held objective was never really tested. How it works → Scenario shows the agent side."});
 
   const filters = h("div", {className: "chips"}, Object.keys(RESULT_FILTERS).map(f => {
     const radio = h("input", {type: "radio", name: "resfilter", value: f, checked: f === resFilter});
@@ -2046,7 +2050,7 @@ function renderResults() {
   }));
   const table = h("table", {}, h("thead", {}, h("tr", {}, head("objective", "Objective"), head("verdict", "Verdict"),
     head("score", "Score"), head(null, "Explanation"))), body);
-  $("results").replaceChildren(summary, toolbar, table,
+  $("results").replaceChildren(summary, ...(trpNote ? [trpNote] : []), toolbar, table,
     ...(body.children.length ? [] : [h("p", {className: "hint", textContent: "No result matches this filter."})]));
 }
 

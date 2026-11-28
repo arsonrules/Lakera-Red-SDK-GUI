@@ -616,6 +616,8 @@ async function uiTests() {
   const trpDone = await until(() => FINAL($("status").textContent) && !$("go").disabled, 60000);
   check("a tool-response-poisoning scan runs the custom objective only",
     trpDone && $("status").textContent === "done" && resRows().length === 1, `${$("status").textContent} ${resRows().length}`);
+  check("results: a held TRP objective warns that unreported tool calls can't be poisoned",
+    /reported none/.test($("trp-held-note")?.textContent || ""), $("results").textContent.slice(0, 200));
 
   // ---- the scenario end to end: Set up this scan, against the demo agent that obeys a poisoned tool result
   if (innerWidth <= 900) $("tab-config").click();
@@ -631,6 +633,7 @@ async function uiTests() {
     `${$("status").textContent} ${report.split("\n").filter(l => l.includes("example.")).join(" ")}`);
   check("scenario: the verdict explains what the agent did with the poisoned result",
     report.includes("emailed the inbox to attacker@evil.example"), report.slice(-300));
+  check("results: no held-objective warning when every TRP objective was broken", !$("trp-held-note"));
   const bubbles = [...$("convs").querySelectorAll(".bubble.reply")].map(b => b.textContent);
   check("scenario: the conversation shows the agent obeying the planted instruction",
     bubbles.some(t => t.includes("forwarded it to attacker@evil.example")), bubbles.join(" | ").slice(0, 300));
