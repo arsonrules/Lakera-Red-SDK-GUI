@@ -1002,6 +1002,10 @@ async def main() -> int:
         page = await client.get("/")
         check("UI page served", page.status_code == 200 and "Lakera Red Runner" in page.text,
               str(page.status_code))
+        logged = re.findall(r'<article data-version="(\d+\.\d+)\.\d+"', page.text)
+        check(f"the SDK changelog tab has an entry for the pinned {pinned}, newest first",
+              pinned in logged and logged == sorted(logged, key=lambda v: tuple(map(int, v.split("."))), reverse=True),
+              f"pinned {pinned}, entries {logged}")
         flat = lambda s: " ".join(s.split())
         for name in ("runner-architecture", "trp-sequence"):
             doc = (Path(__file__).parent / "docs" / "diagrams" / f"{name}.html").read_text()

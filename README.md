@@ -137,6 +137,8 @@ many are selected. None selected means all objectives run. Smoke scans ignore th
   endpoint, adds an example objective if you have none, and sends `{{session_id}}` in an
   `X-Session-Id` header unless the body or headers already carry it. Standalone copies live in
   [`docs/diagrams/`](docs/diagrams/), and `test_all.py` fails if the two drift apart.
+  **SDK changelog** lists what each Python release of `lakera-red-sdk` added and what the
+  runner does with it. It tags the installed release, and marks newer ones as not installed yet.
 
 A reload during a scan reattaches to it. If the connection to the server drops, a banner
 says so and offers the run in **Recent runs**.
@@ -458,6 +460,33 @@ await uiTests();
 uiTestsBeforeReload();           // then reload the page and load the script again
 await uiTestsAfterReload();      // checks what the browser remembered
 ```
+
+## Updating the SDK
+
+The UI must follow the SDK version. When `lakera-red-sdk` gets a new minor version (for
+example 0.12 → 0.13), update the UI in the same change. Don't bump only the pin.
+
+1. Confirm the release is on PyPI (`pip index versions lakera-red-sdk`), then change the pin
+   in `requirements.txt` (`lakera-red-sdk~=0.13.0`) and reinstall.
+2. Read the SDK's changelog and diff its public API (`intercept_tool`, the scan config
+   models, strategy and objective names). Then follow each change through the UI:
+   - New or renamed fields go in the form and in `app.py`'s request model.
+   - Removed options come out of the form, along with any help text that mentions them.
+   - Changed result shapes need updates in the Results view and the exports.
+3. Add the release to **How it works → SDK changelog** in `static/index.html`: one
+   `<article data-version="…">` at the top, using the Python notes from
+   [Red's SDK changelog](https://docs.lakera.ai/docs/red/sdk-changelog), plus an
+   "In this runner" line naming the fields that use it. `test_all.py` fails while the
+   pinned version has no entry.
+4. Update version-specific copy: the version near the top of this README, "SDK 0.x" feature
+   tags (`grep -rn "SDK 0\." README.md app.py static`), and the How it works diagrams in
+   `docs/diagrams/` and their inline copies in `static/index.html`.
+5. Update the mock relay in `test_all.py` to match any changed Red API, and add a check for
+   each new UI feature. Then run `python test_all.py` and the browser suite at 375px and at
+   desktop width.
+
+The header version (`SDK v…`) and the version checks in both test suites already follow
+the installed SDK and the pin, so they need no edits.
 
 ## Notes
 
