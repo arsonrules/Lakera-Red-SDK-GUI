@@ -151,6 +151,8 @@ async function uiTests() {
   const example = JSON.parse($("custom_objectives").value || "[]");
   check("set up this scan: adds an example objective that passes the field check",
     example.length === 1 && example[0].key && !invalid("custom_objectives"), $("custom_objectives").value.slice(0, 80));
+  check("set up this scan: a note asks for the example objective to be rewritten",
+    /example objective/.test(msg("custom_objectives")), msg("custom_objectives"));
   check("set up this scan: sends {{session_id}} in a header and keeps the others",
     $("headers").value === '{"X-Env":"staging","X-Session-Id":"{{session_id}}"}' && !invalid("body_template"), $("headers").value);
   check("set up this scan: opens the form at the Scan section", document.body.dataset.view === "config"
@@ -163,6 +165,7 @@ async function uiTests() {
   check("set up this scan: keeps objectives and a {{session_id}} already in place",
     $("custom_objectives").value === mine && $("headers").value === "" && $("dg-setup-msg").textContent === "Picked tool-response-poisoning.",
     $("dg-setup-msg").textContent);
+  check("set up this scan: no example note once the objectives are your own", !msg("custom_objectives"), msg("custom_objectives"));
   await applySnapshot(formBefore);
   if (innerWidth <= 900) $("tab-run").click();
   $("dg-arch").click();
