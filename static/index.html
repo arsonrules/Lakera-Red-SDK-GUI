@@ -1964,6 +1964,7 @@ async function refreshHistory() {
     ...list.map(r => h("option", {value: r.id, title: r.target || "",
       textContent: `${time(r.started)} · ${r.name || "scan"} · ${r.status}`})));
   $("history").value = list.some(r => r.id === currentRun) ? currentRun : "";
+  return list;
 }
 $("history").onchange = () => {
   const id = $("history").value;
@@ -1973,15 +1974,16 @@ $("history").onchange = () => {
   listen(id);
 };
 
-(async () => {
+// On load: reattach this tab's run, or, with no run on the server yet, open on How it works
+// rather than an empty Conversations pane.
+async function openRunPanel() {
   let id = null;
   try { id = sessionStorage.getItem(RUN_KEY); } catch {}
-  if (id && (await fetch(`/api/scans/${id}`).catch(() => ({ok: false}))).ok) listen(id);
-  else {
-    try { sessionStorage.removeItem(RUN_KEY); } catch {}
-    refreshHistory();
-  }
-})();
+  if (id && (await fetch(`/api/scans/${id}`).catch(() => ({ok: false}))).ok) return listen(id);
+  try { sessionStorage.removeItem(RUN_KEY); } catch {}
+  if (!(await refreshHistory()).length) showPane("guide");
+}
+openRunPanel();
 
 // ---------------------------------------------------------------- results
 // A threat-model objective's key is generated.<target>.<hash>; show the name Red gave it.

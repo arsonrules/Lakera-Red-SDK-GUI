@@ -142,6 +142,24 @@ async function uiTests() {
   check("view tabs: every label stays on one line", Math.max(...tabHeights) - Math.min(...tabHeights) <= 2
     && Math.max(...tabHeights) < 44, tabHeights.join());
 
+  // First visit: with no run on the server yet, the Run panel opens on How it works.
+  const realFetch = window.fetch, runList = list => (u, o) =>
+    /\/api\/scans$/.test(String(u)) ? Promise.resolve(new Response(JSON.stringify(list))) : realFetch(u, o);
+  let runKey = null;
+  try { runKey = sessionStorage.getItem("redrunner.run"); sessionStorage.removeItem("redrunner.run"); } catch {}
+  window.fetch = runList([]);
+  showPane("conv");
+  await openRunPanel();
+  check("first visit: with no run yet, the Run panel opens on How it works",
+    !$("pane-guide").hidden && $("vt-guide").getAttribute("aria-selected") === "true");
+  window.fetch = runList([{id: "r1", name: "earlier scan", status: "done", started: 0}]);
+  showPane("conv");
+  await openRunPanel();
+  check("first visit: once a run exists, the Run panel stays on Conversations", !$("pane-conv").hidden && $("pane-guide").hidden);
+  window.fetch = realFetch;
+  try { if (runKey) sessionStorage.setItem("redrunner.run", runKey); } catch {}
+  await refreshHistory();
+
   // Tab bars follow the ARIA tabs pattern: arrows, Home and End move and select.
   const key = (el, k) => el.dispatchEvent(new KeyboardEvent("keydown", {key: k, bubbles: true}));
   $("vt-conv").click(); $("vt-conv").focus();
