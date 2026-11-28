@@ -1594,6 +1594,8 @@ async def main() -> int:
         relay.turns_per_session = 1
         body = relay.scans.get(run.get("scan_id"), {}).get("body", {})
         check("tool-response-poisoning scan completes", run["status"] == "done", json.dumps(run)[:300])
+        check("the run records its strategy, so the results view can read the verdict",
+              run.get("strategy") == TRP, str(run.get("strategy")))
         check("TRP: the strategy and attacks per objective reach Red",
               body.get("strategyName") == TRP and body.get("strategyParams") == {"numberOfAttacksPerObjective": 4},
               json.dumps(body)[:300])

@@ -266,6 +266,7 @@ class Run:
     status: str = "starting"
     name: str = ""
     target: str = ""      # the target URL as shown in the run history: no credentials or query
+    strategy: str = ""    # tells the results view how to read a verdict
     logs: list[dict[str, Any]] = field(default_factory=list)
     scan_id: str | None = None
     target_id: str | None = None
@@ -294,6 +295,7 @@ class Run:
             "status": self.status,
             "name": self.name,
             "target": self.target,
+            "strategy": self.strategy,
             "scan_id": self.scan_id,
             "target_id": self.target_id,
             "dashboard_link": self.dashboard_link,
@@ -703,7 +705,8 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
             raise HTTPException(400, "tool-response-poisoning needs the target to report its tool "
                                      "calls with this session's id: put {{session_id}} in the "
                                      "request body or a header value")
-    run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url))
+    run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url),
+              strategy=req.strategy.name)
     RUNS[run.id] = run
     run.log("info", "run queued")
     run.task = asyncio.create_task(_execute(run, req, api_key))
