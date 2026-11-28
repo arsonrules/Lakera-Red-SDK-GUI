@@ -1330,6 +1330,12 @@ const CHECKS = {
 const NOTES = {
   stream_url: v => !v && /^wss?:/i.test($("url").value.trim())
     ? "A ws/wss target's reply names only the token — if it streams, set the https endpoint here." : "",
+  custom_objectives: v => {
+    let list;
+    try { list = JSON.parse(v || "[]"); } catch { return ""; }
+    return Array.isArray(list) && list.some(o => /^example\./.test(o?.key))
+      ? "An example objective (key example.…) is still here. Rewrite it for your agent's own tools, or Red spends the scan on a made-up one." : "";
+  },
 };
 const TARGET_FIELDS = ["url", "model", "response_path", "body_template", "stream_url", "headers"];
 
