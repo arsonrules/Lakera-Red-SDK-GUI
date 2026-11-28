@@ -298,7 +298,12 @@ straight away instead of after recon:
 - at least one success indicator;
 - optional `severity` (`critical`, `high`, `medium`, `low`), shown in the scan report;
 - optional `additional_context`, at most 1500 characters. It shapes the attacks, not the
-  scoring.
+  scoring;
+- optional `runs_with_direct_attacks` (static, crescendo) and `runs_with_indirect_attacks`
+  (tool-response-poisoning), SDK 0.13. Set one to `false` to skip that mode; left out, the
+  objective runs in every mode. Both `false` is refused, and so is a scan whose strategy
+  an objective skips (smoke ignores objectives, so it isn't affected). The form flags
+  both as you type and when you change the strategy.
 
 ## Tool-response poisoning (indirect attacks)
 
@@ -443,7 +448,7 @@ The server suite runs against real local servers and a mock relay. It covers:
   the body, a header or a ws message, each session bound to the id its target was sent
   before the first reply, no catalogue added with threat modeling, and the refusals;
 - custom objective rules: key format and length, duplicates, built-in IDs, name and
-  context length, severity, and success indicators;
+  context length, severity, success indicators, and the attack modes each one runs in;
 - streaming targets: the StreamToken hand-off, SSE framing edge cases, each failure mode,
   verdicts on the streamed reply, and no token leaking;
 - the per-objective SSE lifecycle and the reply timeout;
@@ -457,8 +462,8 @@ The server suite runs against real local servers and a mock relay. It covers:
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
 phone width, accessibility basics, field checks, the Red API test, the connection test, TLS diagnosis,
-saved configs and templates, the objective picker, single-turn targets, tool-response
-poisoning, How it works
+saved configs and templates, the objective picker, single-turn targets, attack modes,
+tool-response poisoning, How it works
 and its Set up this scan button, runs, results, export, history and reattach, and the
 theme. It needs `demo_servers.py` running. Serve the file, load the page, and run this in
 the browser console:

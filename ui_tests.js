@@ -240,6 +240,29 @@ async function uiTests() {
     `${$("agent-snippet-copy").textContent} ${String(copied).slice(0, 60)}`);
   if (navigator.clipboard) delete navigator.clipboard.writeText;
   await applySnapshot(formBefore);
+
+  // Custom objectives per attack mode (SDK 0.13): the field check follows Red's rules.
+  pick("target_kind", "endpoint"); $("single_turn").checked = false; fire("single_turn", "change"); pick("strategy", "static");
+  const modeObj = extra => JSON.stringify([{key: "m.1", name: "M", attack_description: "x", success_indicators: ["y"], ...extra}]);
+  set("custom_objectives", modeObj({runs_with_direct_attacks: false, runs_with_indirect_attacks: false}));
+  check("attack modes: an objective that skips both modes is flagged", invalid("custom_objectives")
+    && /never run/.test(msg("custom_objectives")), msg("custom_objectives"));
+  set("custom_objectives", modeObj({runs_with_direct_attacks: "no"}));
+  check("attack modes: a flag must be true or false", invalid("custom_objectives")
+    && /true or false/.test(msg("custom_objectives")), msg("custom_objectives"));
+  set("custom_objectives", modeObj({runs_with_direct_attacks: false}));
+  check("attack modes: an indirect-only objective is flagged for a static scan", invalid("custom_objectives")
+    && /static scan/.test(msg("custom_objectives")), msg("custom_objectives"));
+  pick("strategy", "tool-response-poisoning");
+  check("attack modes: switching to tool-response-poisoning clears it", !invalid("custom_objectives"), msg("custom_objectives"));
+  set("custom_objectives", modeObj({runs_with_indirect_attacks: false}));
+  check("attack modes: a direct-only objective is flagged for tool-response-poisoning", invalid("custom_objectives")
+    && /tool-response-poisoning scan/.test(msg("custom_objectives")), msg("custom_objectives"));
+  pick("strategy", "static");
+  check("attack modes: switching back to static clears it", !invalid("custom_objectives"), msg("custom_objectives"));
+  pick("strategy", "smoke"); set("custom_objectives", modeObj({runs_with_direct_attacks: false}));
+  check("attack modes: smoke ignores objectives, so nothing is flagged", !invalid("custom_objectives"), msg("custom_objectives"));
+  await applySnapshot(formBefore);
   if (innerWidth <= 900) $("tab-run").click();
   $("dg-arch").click();
   $("vt-conv").click();

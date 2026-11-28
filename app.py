@@ -36,7 +36,7 @@ from lakera_red_sdk import (
     StaticStrategyOptions,
     ToolResponsePoisoningStrategyOptions,
 )
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StrictBool, StringConstraints, model_validator
 
 from targets import TargetConfig, explain_tls_failure, list_models, open_session
 from tls_doctor import MAX_CA_BYTES, adiagnose, read_ca_pems
@@ -169,6 +169,17 @@ class CustomObjectiveSpec(BaseModel):
     success_indicators: list[Text] = Field(min_length=1)
     severity: Literal["critical", "high", "medium", "low"] | None = None
     additional_context: str | None = Field(None, max_length=1500)
+    # Which attack modes run it (SDK 0.13): direct = static and crescendo, indirect =
+    # tool-response-poisoning. None (unset) runs it in every mode.
+    runs_with_direct_attacks: StrictBool | None = None
+    runs_with_indirect_attacks: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def _runs_somewhere(self) -> CustomObjectiveSpec:
+        if self.runs_with_direct_attacks is False and self.runs_with_indirect_attacks is False:
+            raise ValueError(f"custom objective {self.key} skips both direct and indirect attacks, "
+                             "so it would never run")
+        return self
 
 
 class RedApiSpec(BaseModel):
@@ -707,6 +718,14 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
     if clash := sorted(set(keys) & {*OBJECTIVE_IDS, *req.objectives}):
         raise HTTPException(400, f"custom objective key {', '.join(clash)} is already an objective "
                                  "ID — give the custom objective its own key")
+    # Red refuses a scan whose strategy a custom objective opts out of.
+    mode, flag = (("indirect", "runs_with_indirect_attacks") if req.strategy.indirect
+                  else ("direct", "runs_with_direct_attacks"))
+    if req.strategy.name != "smoke" and (
+            skipped := [o.key for o in req.custom_objectives if getattr(o, flag) is False]):
+        raise HTTPException(400, f"{', '.join(skipped)} set {flag} to false, so a "
+                                 f"{req.strategy.name} scan ({mode} attacks) can't run it — "
+                                 f"remove it or pick a strategy it runs with")
     if req.strategy.indirect:
         if req.target_single_turn:
             raise HTTPException(400, "tool-response-poisoning needs an agent that calls tools over "
