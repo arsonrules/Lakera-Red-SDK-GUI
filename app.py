@@ -14,10 +14,11 @@ import importlib.metadata
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -220,6 +221,9 @@ class ScanRequest(RedApiSpec):
     # and Red refuses crescendo and tool-response-poisoning. None keeps the target's value.
     # A model target is always single-turn: the runner sends it each attack on its own.
     single_turn: bool | None = None
+    # A dataset to run in place of objectives (SDK 0.13): each conversation's prompts go out
+    # unchanged, in order, one session per conversation, judged as prompt injection.
+    dataset_id: str = ""
     # Model targets: also hand the system prompt sent to the model to Red's judge.
     system_prompt_as_ground_truth: bool = True
     # Target under test
@@ -463,6 +467,13 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
             recon = await client.run_recon(target.target_id, handler)
             run.log("info", "recon finished", discovered=bool(recon))
 
+        if req.dataset_id:
+            run.status = "creating scan"
+            scan = await client.create_scan(target.target_id, name=req.scan_name,
+                                            dataset_id=req.dataset_id, concurrency=req.concurrency)
+            await _run_scan(run, scan, handler)
+            return
+
         objectives = req.objectives or None
         if req.threat_model:
             run.status = "threat modeling"
@@ -486,24 +497,7 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
             concurrency=req.concurrency,
             language=req.language or None,
         )
-        run.scan_id = scan.scan_id
-        run.dashboard_link = scan.dashboard_link
-        run.log("info", "scan created", scan_id=scan.scan_id, dashboard=scan.dashboard_link)
-        run.bell.set()
-
-        run.status = "running"
-        await scan.run(handler)
-
-        run.status = "evaluating"
-        results = await scan.get_results()
-        for _ in range(30):
-            if results.ready:
-                break
-            await asyncio.sleep(10)
-            results = await scan.get_results()
-        run.results = results.to_json()
-        run.status = "done" if results.ready else "timed out waiting for evaluation"
-        run.log("info", "results ready" if results.ready else "results not ready")
+        await _run_scan(run, scan, handler)
     except Exception as exc:  # surfaced to the UI rather than lost in a task
         run.status = "error"
         run.error = f"{type(exc).__name__}: {exc}"
@@ -514,6 +508,28 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
     finally:
         await client.close()
         run.bell.set()
+
+
+async def _run_scan(run: Run, scan: Any, handler: Any) -> None:
+    """Relay a created scan's attacks to the target, then wait for Red's verdicts."""
+    run.scan_id = scan.scan_id
+    run.dashboard_link = scan.dashboard_link
+    run.log("info", "scan created", scan_id=scan.scan_id, dashboard=scan.dashboard_link)
+    run.bell.set()
+
+    run.status = "running"
+    await scan.run(handler)
+
+    run.status = "evaluating"
+    results = await scan.get_results()
+    for _ in range(30):
+        if results.ready:
+            break
+        await asyncio.sleep(10)
+        results = await scan.get_results()
+    run.results = results.to_json()
+    run.status = "done" if results.ready else "timed out waiting for evaluation"
+    run.log("info", "results ready" if results.ready else "results not ready")
 
 
 # --------------------------------------------------------------------------- api
@@ -703,6 +719,13 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
         raise HTTPException(400, str(exc)) from exc
     # A model target gets each attack as a fresh single-turn request, so a multi-turn
     # adaptive strategy has no conversation to escalate.
+    if req.dataset_id:
+        # The SDK refuses these with a dataset; refusing here keeps them from being dropped quietly.
+        if extra := [n for n, v in (("objectives", req.objectives), ("custom objectives", req.custom_objectives),
+                                    ("agent threat modeling", req.threat_model)) if v]:
+            raise HTTPException(400, "a dataset scan sends the dataset's prompts unchanged, so it "
+                                     f"takes no {', '.join(extra)} — clear them or pick no dataset")
+        return _queue_run(req, api_key, strategy="dataset")
     if req.threat_model and req.strategy.name == "smoke":
         raise HTTPException(400, "the smoke strategy ignores objectives, so threat-model "
                                  "objectives would not run — use static or crescendo")
@@ -741,12 +764,65 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
             raise HTTPException(400, "tool-response-poisoning needs the target to report its tool "
                                      "calls with this session's id: put {{session_id}} in the "
                                      "request body or a header value")
+    return _queue_run(req, api_key, strategy=req.strategy.name)
+
+
+def _queue_run(req: ScanRequest, api_key: str, *, strategy: str) -> dict[str, str]:
     run = Run(id=uuid.uuid4().hex[:12], name=req.scan_name, target=_shown_url(req.target.url),
-              strategy=req.strategy.name)
+              strategy=strategy)
     RUNS[run.id] = run
     run.log("info", "run queued")
     run.task = asyncio.create_task(_execute(run, req, api_key))
     return {"run_id": run.id}
+
+
+# ----------------------------------------------------------------- datasets (SDK 0.13)
+
+class DatasetUploadRequest(RedApiSpec):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    description: str | None = None
+    csv: str = Field(min_length=1, max_length=5_000_000)  # the dataset template's CSV, as text
+
+
+class DatasetRequest(RedApiSpec):
+    dataset_id: str = Field(min_length=1)
+
+
+async def _with_red(req: RedApiSpec, call: Any) -> Any:
+    """Run one SDK call with the request's key; Red's refusal comes back as a 502 with its reason."""
+    client = LakeraRedClient(req.resolved_key(), base_url=req.base_url, log_level="warn")
+    try:
+        return await call(client)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(502, f"Red sent a reply that isn't JSON: {exc}") from exc
+    except ValueError as exc:  # the SDK's own checks, e.g. a dataset id it can't use
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Red: {type(exc).__name__}: {exc}") from exc
+    finally:
+        await client.close()
+
+
+@app.post("/api/datasets/list")
+async def list_datasets(req: RedApiSpec) -> list[dict[str, Any]]:
+    return [asdict(d) for d in await _with_red(req, lambda c: c.list_datasets())]
+
+
+@app.post("/api/datasets/upload")
+async def upload_dataset(req: DatasetUploadRequest) -> dict[str, Any]:
+    async def upload(client: LakeraRedClient) -> Any:
+        # The SDK reads a .csv file; Red checks the rows and names the first broken ones.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dataset.csv"
+            path.write_text(req.csv, encoding="utf-8")
+            return await client.upload_dataset(req.name, description=req.description or None, file=path)
+    return asdict(await _with_red(req, upload))
+
+
+@app.post("/api/datasets/delete")
+async def delete_dataset(req: DatasetRequest) -> dict[str, bool]:
+    await _with_red(req, lambda c: c.delete_dataset(req.dataset_id))
+    return {"deleted": True}
 
 
 @app.get("/api/scans")
