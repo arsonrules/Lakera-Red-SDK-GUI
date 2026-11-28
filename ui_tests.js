@@ -142,6 +142,28 @@ async function uiTests() {
   check("view tabs: every label stays on one line", Math.max(...tabHeights) - Math.min(...tabHeights) <= 2
     && Math.max(...tabHeights) < 44, tabHeights.join());
 
+  // Tab bars follow the ARIA tabs pattern: arrows, Home and End move and select.
+  const key = (el, k) => el.dispatchEvent(new KeyboardEvent("keydown", {key: k, bubbles: true}));
+  $("vt-conv").click(); $("vt-conv").focus();
+  const steps = [];
+  key($("vt-conv"), "ArrowRight"); steps.push(document.activeElement === $("vt-raw") && !$("pane-raw").hidden);
+  key($("vt-raw"), "End"); steps.push(document.activeElement === $("vt-guide") && !$("pane-guide").hidden);
+  key($("vt-guide"), "ArrowRight"); steps.push(document.activeElement === $("vt-conv") && !$("pane-conv").hidden);
+  key($("vt-conv"), "ArrowLeft"); steps.push(document.activeElement === $("vt-guide"));
+  key($("vt-guide"), "Home"); steps.push(document.activeElement === $("vt-conv"));
+  $("vt-guide").click(); $("dg-arch").click(); $("dg-arch").focus(); key($("dg-arch"), "ArrowRight");
+  steps.push($("dg-trp").getAttribute("aria-selected") === "true" && document.activeElement === $("dg-trp"));
+  check("tabs: arrow keys, Home and End move between tabs and select them, wrapping at the ends",
+    steps.every(Boolean), steps.join());
+  await sleep(0);
+  const stops = [...document.querySelectorAll("[role=tablist]")]
+    .map(l => [...l.querySelectorAll("[role=tab]")].filter(t => t.tabIndex === 0).length);
+  check("tabs: only the selected tab of each tab bar is in the Tab order", stops.every(n => n === 1), stops.join());
+  showPane("results");
+  await sleep(0);
+  check("tabs: a tab selected by code becomes the Tab stop", $("vt-results").tabIndex === 0 && $("vt-conv").tabIndex === -1);
+  showPane("guide");
+
   // Set up this scan: fills only what tool-response-poisoning lacks, then shows the form.
   const formBefore = snapshot();
   const setUp = async () => { $("dg-setup-msg").textContent = ""; $("dg-setup").click(); return until(() => $("dg-setup-msg").textContent); };

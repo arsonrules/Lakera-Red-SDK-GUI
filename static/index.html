@@ -1704,6 +1704,24 @@ function showPane(name) {
 }
 ["conv", "raw", "results", "guide"].forEach(p => { $("vt-" + p).onclick = () => showPane(p); });
 
+// Tab bars: arrow keys, Home and End move between tabs and select them, and only the selected
+// tab is in the Tab order (kept so when code switches tabs, e.g. Results opening after a scan).
+document.querySelectorAll("[role=tablist]").forEach(list => {
+  const tabs = () => [...list.querySelectorAll("[role=tab]")];
+  const sync = () => tabs().forEach(t => { t.tabIndex = t.getAttribute("aria-selected") === "true" ? 0 : -1; });
+  new MutationObserver(sync).observe(list, {subtree: true, attributeFilter: ["aria-selected"]});
+  sync();
+  list.addEventListener("keydown", e => {
+    const all = tabs(), i = all.indexOf(e.target);
+    const j = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: all.length - 1}[e.key];
+    if (i < 0 || j === undefined) return;
+    e.preventDefault();
+    const next = all[(j + all.length) % all.length];
+    next.focus();
+    next.click();
+  });
+});
+
 // How it works: the diagrams keep docs/diagrams' light colors in their markup; paint them with the
 // active theme's variables so they follow dark and light mode.
 const DG_VAR = {"#f6f8fa": "--bg", "#ffffff": "--panel", "#1f2328": "--fg", "#59636e": "--dim",
