@@ -448,6 +448,16 @@ class MockRelay:
             objectives += [o["key"] for o in body.get("customObjectives") or []]
             if body["strategyName"] == "smoke":
                 objectives = ["smoke.probe.1"]
+            # Like Red (0.13): an objective must run in some mode, and in this scan's mode.
+            flag = "runsWithIndirectAttacks" if indirect else "runsWithDirectAttacks"
+            for o in body.get("customObjectives") or []:
+                why = ("runs in no attack mode" if o.get("runsWithDirectAttacks") is False
+                       and o.get("runsWithIndirectAttacks") is False
+                       else f"is excluded from {body['strategyName']}"
+                       if o.get(flag) is False and body["strategyName"] != "smoke" else "")
+                if why:
+                    return Response(json.dumps({"error": f"custom objective {o['key']} {why}"}), 400,
+                                    media_type="application/json")
             single = self.targets.get(body.get("targetId"), {}).get("singleTurn", False)
             if single and body["strategyName"] in ("crescendo", "tool-response-poisoning"):  # like Red
                 return Response(json.dumps({"error": f"{body['strategyName']} needs a multi-turn "
@@ -1715,6 +1725,36 @@ async def main() -> int:
                       custom_objectives=[indirect_obj, {**indirect_obj, "name": "Again"}])
         await refused("custom key equal to a built-in ID", "already an objective ID",
                       **bad(key="security.tool-extraction.1"), objectives=["safety.cbrne.1"])
+
+        print("\n[14] custom objectives per attack mode (SDK 0.13)")
+        direct_only = {**indirect_obj, "key": "my-org.direct-only.1", "runs_with_indirect_attacks": False}
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="modes-agent",
+                                                  objectives=[], custom_objectives=[direct_only]))
+        sent = next((s["body"] for s in relay.scans.values()
+                     if any(o["key"] == "my-org.direct-only.1" for o in s["body"].get("customObjectives") or [])), {})
+        check("a direct-only objective runs in a static scan, its modes sent to Red",
+              run["status"] == "done" and sent.get("customObjectives", [{}])[0].get("runsWithIndirectAttacks") is False
+              and "runsWithDirectAttacks" not in sent["customObjectives"][0], json.dumps(sent.get("customObjectives"))[:300])
+        indirect_only = {**indirect_obj, "key": "my-org.indirect-only.1", "runs_with_direct_attacks": False}
+        run = await run_scan(client, base_payload(relay_url, sid_target, target_name="modes-trp", strategy=trp,
+                                                  objectives=[], custom_objectives=[indirect_only]))
+        check("an indirect-only objective runs in a tool-response-poisoning scan", run["status"] == "done",
+              json.dumps(run)[:300])
+        await refused("an objective that skips both modes", "never run", 422,
+                      custom_objectives=[{**indirect_obj, "runs_with_direct_attacks": False,
+                                          "runs_with_indirect_attacks": False}])
+        await refused("a direct-only objective in a tool-response-poisoning scan", "runs_with_indirect_attacks to false",
+                      strategy=trp, objectives=[], custom_objectives=[direct_only])
+        await refused("an indirect-only objective in a static scan", "runs_with_direct_attacks to false",
+                      target=http_target, objectives=[], custom_objectives=[indirect_only])
+        await refused("an indirect-only objective in a crescendo scan", "crescendo scan (direct attacks)",
+                      target=http_target, strategy={"name": "crescendo"}, objectives=[],
+                      custom_objectives=[indirect_only])
+        await refused("a mode flag that isn't true or false", "runs_with_direct_attacks", 422,
+                      custom_objectives=[{**indirect_obj, "runs_with_direct_attacks": "no"}])
+        res = await client.post("/api/scans", json=base_payload(relay_url, http_target, strategy={"name": "smoke"},
+                                                                objectives=[], custom_objectives=[indirect_only]))
+        check("smoke ignores objectives, so an indirect-only one doesn't block it", res.status_code == 200, res.text[:200])
 
         print("\n[15] single-turn targets (SDK 0.13)")
         relay.turns_per_session = 3  # a multi-turn target would get 3 prompts per session

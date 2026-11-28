@@ -555,7 +555,10 @@
         placeholder='[{"key":"my-org.x.1","name":"X","attack_description":"...","success_indicators":["..."],"severity":"high","additional_context":"..."}]'></textarea>
       <div class="hint">Key: 1–128 letters, digits, <code>. _ : -</code>, unique. Name up to 200
         characters. Optional <code>severity</code> (critical, high, medium, low) and
-        <code>additional_context</code> (up to 1500 characters, shapes the attacks, not the scoring).</div>
+        <code>additional_context</code> (up to 1500 characters, shapes the attacks, not the scoring).
+        Optional <code>runs_with_direct_attacks</code> (static, crescendo) and
+        <code>runs_with_indirect_attacks</code> (tool-response-poisoning): set one to <code>false</code>
+        to skip that mode; left out, the objective runs in every mode.</div>
       <label class="inline"><input type="checkbox" id="threat_model"> Add objectives from agent threat modeling</label>
       <label class="inline" id="refresh_tm_box" hidden><input type="checkbox" id="refresh_threat_model"> Re-infer the topology first</label>
       <div class="hint" id="threat_model_hint">Red infers the target's topology from its ground truth
@@ -985,8 +988,9 @@ async def chat(request: Request):
           <li><b>Breaking:</b> <code>CustomObjective.category_id</code> is gone (it never had an effect), so the 7th
             positional argument is now <code>runs_with_direct_attacks</code>. Pass fields by keyword.</li>
         </ul><p class="runner">In this runner: <b>Single-turn target</b> under Scan (model API targets always are). The
-          objective limits and the built-in rule are checked before a scan starts. Datasets and per-mode objectives
-          aren't in the form yet.</p></article>
+          objective limits, the built-in rule and <code>runs_with_direct_attacks</code> /
+          <code>runs_with_indirect_attacks</code> in Custom objectives are checked before a scan starts.
+          Datasets aren't in the form yet.</p></article>
         <article data-version="0.12.0"><h3>0.12.0 <small>2026-10-19</small></h3><ul>
           <li><b>Agent threat modeling:</b> <code>infer_topology</code> assesses the agent's weaknesses from its ground truth,
             and <code>generate_objectives</code> makes one objective per weakness. <code>get_topology</code> and
@@ -1164,7 +1168,8 @@ function refresh() {
   $("trp_obj_note").hidden = !trp;
   $("custom_req").textContent = trp ? " — required" : " — optional";
   // Their checks depend on the strategy, so a stale message goes once it changes.
-  ["body_template", "custom_objectives"].forEach(id => $(id).getAttribute("aria-invalid") && checkField(id));
+  ["body_template", "custom_objectives"].forEach(id => ($(id).getAttribute("aria-invalid")
+    || (id === "custom_objectives" && /runs_with_/.test($(id).value))) && checkField(id));
   $("ca_path_box").hidden = ca !== "path";
   $("ca_upload_box").hidden = ca !== "upload";
   updateSummaries();
@@ -1442,8 +1447,24 @@ const CHECKS = {
     && Object.values(o).every(x => typeof x === "string"), 'use an object of strings, e.g. {"X-Env": "staging"}.'),
   custom_objectives: v => jsonError(v, Array.isArray, "use an array of objective objects.")
     || (isTrp() && !$("threat_model").checked && !(v && JSON.parse(v).length)
-        ? "tool-response-poisoning needs at least one custom objective — built-in objectives run only in direct attacks." : ""),
+        ? "tool-response-poisoning needs at least one custom objective — built-in objectives run only in direct attacks." : "")
+    || attackModeError(v ? JSON.parse(v) : []),
 };
+// Which attack modes run a custom objective (SDK 0.13): Red refuses a scan whose strategy
+// one of them opts out of, and an objective that opts out of both.
+const MODE_FLAGS = ["runs_with_direct_attacks", "runs_with_indirect_attacks"];
+function attackModeError(list) {
+  for (const o of list) {
+    const key = o?.key || "an objective";
+    const bad = MODE_FLAGS.find(f => f in (o || {}) && o[f] !== null && typeof o[f] !== "boolean");
+    if (bad) return `${key}: ${bad} must be true or false (or left out to run in every mode).`;
+    if (MODE_FLAGS.every(f => o?.[f] === false)) return `${key} skips both direct and indirect attacks, so it would never run.`;
+  }
+  const s = $("strategy").value, flag = isTrp() ? MODE_FLAGS[1] : MODE_FLAGS[0];
+  const skipped = s === "smoke" ? [] : list.filter(o => o?.[flag] === false).map(o => o.key);
+  return skipped.length ? `${skipped.join(", ")} set ${flag} to false, so a ${s} scan can't run it — `
+    + "remove it or pick a strategy it runs with." : "";
+}
 const NOTES = {
   stream_url: v => !v && /^wss?:/i.test($("url").value.trim())
     ? "A ws/wss target's reply names only the token — if it streams, set the https endpoint here." : "",
