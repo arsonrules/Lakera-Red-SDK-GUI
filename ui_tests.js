@@ -138,6 +138,9 @@ async function uiTests() {
   applyTheme(themeBefore);
   check("how it works: view tabs fit without scrolling", $("viewtabs").scrollWidth <= $("viewtabs").clientWidth,
     `${$("viewtabs").scrollWidth} > ${$("viewtabs").clientWidth}`);
+  const tabHeights = [...$("viewtabs").children].map(b => b.offsetHeight);
+  check("view tabs: every label stays on one line", Math.max(...tabHeights) - Math.min(...tabHeights) <= 2
+    && Math.max(...tabHeights) < 44, tabHeights.join());
 
   // Set up this scan: fills only what tool-response-poisoning lacks, then shows the form.
   const formBefore = snapshot();
