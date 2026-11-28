@@ -205,10 +205,18 @@ class ScanRequest(RedApiSpec):
     # How long Red waits for each reply before abandoning that objective (SDK 0.10+,
     # stored on the target). None keeps the target's stored value, or Red's 300 s default.
     response_timeout_seconds: int | None = Field(None, ge=1, le=480)
+    # Single-turn target (SDK 0.13, stored on the target): static sends one prompt per session,
+    # and Red refuses crescendo and tool-response-poisoning. None keeps the target's value.
+    # A model target is always single-turn: the runner sends it each attack on its own.
+    single_turn: bool | None = None
     # Model targets: also hand the system prompt sent to the model to Red's judge.
     system_prompt_as_ground_truth: bool = True
     # Target under test
     target: TargetSpec
+
+    @property
+    def target_single_turn(self) -> bool | None:
+        return True if self.target.kind == "model" else self.single_turn
 
     def ground_truth_for_judge(self) -> GroundTruth | None:
         gt = self.ground_truth
@@ -420,19 +428,23 @@ async def _execute(run: Run, req: ScanRequest, api_key: str) -> None:
         run.status = "resolving target"
         if req.target_id:
             target = await client.get_target(req.target_id)
-            if req.response_timeout_seconds:
+            if req.response_timeout_seconds or req.target_single_turn is not None:
                 target = await client.update_target(
-                    target.target_id, response_timeout_seconds=req.response_timeout_seconds)
-            run.log("info", "reusing target", target_id=target.target_id, name=target.name)
+                    target.target_id, response_timeout_seconds=req.response_timeout_seconds,
+                    single_turn=req.target_single_turn)
+            run.log("info", "reusing target", target_id=target.target_id, name=target.name,
+                    single_turn=target.single_turn)
         else:
             target = await client.create_or_get_target(
                 req.target_name or "web-service target",
                 app_context=req.app_context.to_recon(),
                 ground_truth=req.ground_truth_for_judge(),
                 response_timeout_seconds=req.response_timeout_seconds,
+                single_turn=req.target_single_turn,
                 handler=handler,
             )
-            run.log("info", "target ready", target_id=target.target_id, name=target.name)
+            run.log("info", "target ready", target_id=target.target_id, name=target.name,
+                    single_turn=target.single_turn)
         run.target_id = target.target_id
 
         if req.refresh_recon:
@@ -666,6 +678,11 @@ async def tls_check(req: ProbeRequest) -> dict[str, Any]:
         return {"verdict": "not-tls", "findings": [str(exc)], "fixes": [], "stores": []}
 
 
+def _single_turn_why(req: ScanRequest) -> str:
+    return ("a model API target runs single-turn" if req.target.kind == "model"
+            else "this target is set to single-turn")
+
+
 @app.post("/api/scans")
 async def start_scan(req: ScanRequest) -> dict[str, str]:
     api_key = req.resolved_key()
@@ -681,9 +698,9 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
     if req.threat_model and not req.target_id and req.ground_truth_for_judge() is None:
         raise HTTPException(400, "agent threat modeling infers the topology from ground truth "
                                  "— fill in the ground truth system prompt and/or tools")
-    if req.target.kind == "model" and req.strategy.name == "crescendo":
-        raise HTTPException(400, "crescendo is multi-turn and adaptive; a model API target "
-                                 "runs single-turn — use the static or smoke strategy")
+    if req.target_single_turn and req.strategy.name == "crescendo":
+        raise HTTPException(400, "crescendo is multi-turn and adaptive; "
+                                 f"{_single_turn_why(req)} — use the static or smoke strategy")
     keys = [o.key for o in req.custom_objectives]
     if dupes := sorted({k for k in keys if keys.count(k) > 1}):
         raise HTTPException(400, f"custom objective key used more than once: {', '.join(dupes)}")
@@ -691,9 +708,9 @@ async def start_scan(req: ScanRequest) -> dict[str, str]:
         raise HTTPException(400, f"custom objective key {', '.join(clash)} is already an objective "
                                  "ID — give the custom objective its own key")
     if req.strategy.indirect:
-        if req.target.kind == "model":
+        if req.target_single_turn:
             raise HTTPException(400, "tool-response-poisoning needs an agent that calls tools over "
-                                     "a multi-turn session; a model API target runs single-turn")
+                                     f"a multi-turn session; {_single_turn_why(req)}")
         if built_in := [o for o in req.objectives if o in OBJECTIVE_IDS]:
             raise HTTPException(400, "built-in objectives run only in direct attacks (static, "
                                      f"crescendo), not tool-response-poisoning: {', '.join(built_in)}"

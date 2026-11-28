@@ -221,6 +221,11 @@ async function uiTests() {
     $("custom_objectives").value === mine && $("headers").value === "" && $("dg-setup-msg").textContent === "Picked tool-response-poisoning.",
     $("dg-setup-msg").textContent);
   check("set up this scan: no example note once the objectives are your own", !msg("custom_objectives"), msg("custom_objectives"));
+  $("single_turn").checked = true; fire("single_turn", "change");
+  await setUp();
+  check("set up this scan: turns single-turn off, since Red refuses tool-response-poisoning on it",
+    !$("single_turn").checked && $("strategy").value === "tool-response-poisoning" && /turned off single-turn/.test($("dg-setup-msg").textContent),
+    `${$("single_turn").checked} ${$("strategy").value} ${$("dg-setup-msg").textContent}`);
   if (innerWidth <= 900) $("tab-run").click();
   $("vt-guide").click(); $("dg-trp").click(); document.querySelector(".dg-agent").open = true;
   const copyBox = $("agent-snippet-copy").getBoundingClientRect(), codeBox = $("agent-snippet").getBoundingClientRect();
@@ -454,11 +459,16 @@ async function uiTests() {
     /Fix the highlighted field/.test($("form-err").textContent) && $("status").textContent === statusBefore, $("form-err").textContent);
   set("url", `${DEMO}/chat`); set("response_path", "choices.0.message.content");
   set("api_key", "demo"); set("base_url", "http://127.0.0.1:1");
+  // Record what Run scan sends (passed through unchanged) to check the single_turn field.
+  const sentScans = [], fetchBefore = window.fetch;
+  window.fetch = (u, o) => { if (/\/api\/scans$/.test(String(u)) && o?.method === "POST") sentScans.push(JSON.parse(o.body)); return fetchBefore(u, o); };
   $("go").click();
   await until(() => !$("banner").hidden, 30000);
   check("run: a scan that fails raises the banner", !$("banner").hidden && /failed/i.test($("banner").textContent),
     $("banner").textContent);
   check("run: Run scan is re-enabled after a failure", await until(() => !$("go").disabled));
+  check("run: an endpoint target sends single_turn from its box (off)", sentScans.at(-1)?.single_turn === false,
+    JSON.stringify(sentScans.at(-1)?.single_turn));
   $("banner").querySelector("button").click();
   check("run: banner can be dismissed", $("banner").hidden);
   check("run: a failed scan's error shows in the conversation view", !!$("convs").querySelector(".sysline.error"));
@@ -582,8 +592,22 @@ async function uiTests() {
   pick("target_kind", "endpoint"); pick("strategy", "crescendo");
   check("endpoint mode hides the Model section and allows crescendo",
     !visible($("sec-model")) && !$("strategy").querySelector("option[value=crescendo]").disabled);
+  const tick = v => { $("single_turn").checked = v; fire("single_turn", "change"); };
+  const multi = ["crescendo", "tool-response-poisoning"].map(v => $("strategy").querySelector(`option[value=${v}]`));
+  tick(true);
+  check("single-turn: locks out crescendo and tool-response-poisoning, and says why",
+    $("strategy").value === "static" && multi.every(o => o.disabled) && visible($("strategy_note"))
+    && $("strategy_note_why").textContent === "single-turn", `${$("strategy").value} ${$("strategy_note").textContent.trim()}`);
+  check("single-turn: shown in the Scan summary", /single-turn/.test($("sec-scan").querySelector(".sum").textContent),
+    $("sec-scan").querySelector(".sum").textContent);
+  tick(false);
+  check("single-turn off: the multi-turn strategies are back", multi.every(o => !o.disabled) && !visible($("strategy_note")));
+  tick(true);
   pick("target_kind", "model");
   check("model mode shows the Model section", visible($("sec-model")));
+  check("model mode: no single-turn box (always single-turn), and the note says model API",
+    !visible($("single_turn_box")) && $("strategy_note_why").textContent === "model API");
+  tick(false);
   check("model mode locks out the multi-turn strategy",
     $("strategy").querySelector("option[value=crescendo]").disabled && $("strategy").value === "static"
     && visible($("strategy_note")), $("strategy").value);
@@ -618,6 +642,9 @@ async function uiTests() {
   set("api_key", "demo"); set("base_url", RELAY);
   $("go").click();
   const modelDone = await until(() => $("status").textContent === "done" && !$("go").disabled, 60000);
+  check("run: a model target always sends single_turn: true", sentScans.at(-1)?.single_turn === true && sentScans.at(-1)?.target.kind === "model",
+    JSON.stringify(sentScans.at(-1)?.single_turn));
+  window.fetch = fetchBefore;
   check("a scan against the model target completes", modelDone && $("results").querySelectorAll("tr.res-row").length === OBJS.length,
     $("status").textContent);
   if (innerWidth <= 900) $("tab-config").click();

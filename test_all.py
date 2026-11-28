@@ -357,6 +357,7 @@ class MockRelay:
                 "groundTruth": body.get("groundTruth") or existing.get("groundTruth"),
                 "responseTimeoutSeconds": body.get("responseTimeoutSeconds")
                 or existing.get("responseTimeoutSeconds"),
+                "singleTurn": body.get("singleTurn", existing.get("singleTurn", False)),
             }
             return self.targets[tid]
 
@@ -376,6 +377,8 @@ class MockRelay:
                       (("name", body.get("name")), ("recon", body.get("appContext")),
                        ("groundTruth", body.get("groundTruth")),
                        ("responseTimeoutSeconds", body.get("responseTimeoutSeconds"))) if v})
+            if "singleTurn" in body:
+                t["singleTurn"] = body["singleTurn"]
             return t
 
         # Agent threat modeling: a topology from the ground truth, one objective per weakness.
@@ -437,7 +440,7 @@ class MockRelay:
             return {"reconId": recon_id}
 
         @r.post("/relay/scans")
-        async def create_scan(request: Request) -> dict[str, str]:
+        async def create_scan(request: Request) -> Any:
             body = await request.json()
             sid = f"scan_{len(self.scans)+1}"
             indirect = body["strategyName"] == "tool-response-poisoning"
@@ -445,7 +448,12 @@ class MockRelay:
             objectives += [o["key"] for o in body.get("customObjectives") or []]
             if body["strategyName"] == "smoke":
                 objectives = ["smoke.probe.1"]
-            self.scans[sid] = {"objectives": objectives, "body": body}
+            single = self.targets.get(body.get("targetId"), {}).get("singleTurn", False)
+            if single and body["strategyName"] in ("crescendo", "tool-response-poisoning"):  # like Red
+                return Response(json.dumps({"error": f"{body['strategyName']} needs a multi-turn "
+                                            "target; this target is single-turn"}), 400,
+                                media_type="application/json")
+            self.scans[sid] = {"objectives": objectives, "body": body, "single_turn": single}
             return {"scanId": sid, "dashboardLink": f"http://localhost/scans/{sid}"}
 
         @r.post("/relay/scans/{sid}/start")
@@ -455,7 +463,9 @@ class MockRelay:
                 self._enqueue(sid, sessions=len(objectives), turns=len(TRP_TURNS), prefix="attack",
                               labels=objectives, payloads=TRP_TURNS)
             else:
-                self._enqueue(sid, sessions=len(objectives), turns=self.turns_per_session,
+                # Like Red: a single-turn target gets one prompt per session.
+                turns = 1 if self.scans[sid]["single_turn"] else self.turns_per_session
+                self._enqueue(sid, sessions=len(objectives), turns=turns,
                               prefix="attack", labels=objectives)
             return {"ok": True}
 
@@ -1478,7 +1488,7 @@ async def main() -> int:
             relay_url, {"url": SCHEMES["http"][0]}, strategy={"name": "crescendo", "max_turns": 3}))
         check("crescendo is still allowed for an endpoint target", cres.status_code == 200, cres.text[:200])
 
-        relay.turns_per_session = 2  # Red sends two turns: each must still arrive on its own
+        relay.turns_per_session = 2  # a multi-turn target would get two turns per session
         echo.state.model_requests.clear()
         run = await run_scan(client, base_payload(relay_url, mt, target_name="sft-model"))
         relay.turns_per_session = 1
@@ -1486,8 +1496,8 @@ async def main() -> int:
         check("a static scan against a model target completes",
               run["status"] == "done" and len((run.get("results") or {}).get("results") or []) == 2,
               json.dumps(run)[:300])
-        check("every attack is single-turn: system + one user message, no history",
-              len(reqs) == 4 and all([m["role"] for m in r["messages"]] == ["system", "user"] for r in reqs),
+        check("every attack is single-turn: Red sends one prompt per session, as system + one user message",
+              len(reqs) == 2 and all([m["role"] for m in r["messages"]] == ["system", "user"] for r in reqs),
               json.dumps([[m["role"] for m in r["messages"]] for r in reqs]))
         gt = next((t.get("groundTruth") or {} for t in relay.targets.values() if t["name"] == "sft-model"), {})
         check("the model's system prompt is the judge's ground truth", gt.get("systemPrompt") == sysp,
@@ -1705,6 +1715,39 @@ async def main() -> int:
                       custom_objectives=[indirect_obj, {**indirect_obj, "name": "Again"}])
         await refused("custom key equal to a built-in ID", "already an objective ID",
                       **bad(key="security.tool-extraction.1"), objectives=["safety.cbrne.1"])
+
+        print("\n[15] single-turn targets (SDK 0.13)")
+        relay.turns_per_session = 3  # a multi-turn target would get 3 prompts per session
+        run = await run_scan(client, base_payload(relay_url, http_target, target_name="single-turn-agent",
+                                                  single_turn=True))
+        tid = run.get("target_id")
+        sessions = [s for s in relay.responses if s.startswith(f"{run.get('scan_id')}-")]
+        check("single_turn reaches Red and is saved on the target",
+              run["status"] == "done" and relay.targets.get(tid, {}).get("singleTurn") is True,
+              json.dumps(relay.targets.get(tid))[:200])
+        check("a single-turn target gets one prompt per session",
+              len(sessions) == 2 and all(len(relay.responses[s]) == 1 for s in sessions),
+              str({s: len(relay.responses[s]) for s in sessions}))
+        run = await run_scan(client, base_payload(relay_url, http_target, target_id=tid, target_name="",
+                                                  single_turn=False))
+        sessions = [s for s in relay.responses if s.startswith(f"{run.get('scan_id')}-")]
+        check("turning single-turn off on a reused target: multi-turn sessions again",
+              run["status"] == "done" and relay.targets[tid]["singleTurn"] is False
+              and all(len(relay.responses[s]) == 3 for s in sessions), str({s: len(relay.responses[s]) for s in sessions}))
+        run = await run_scan(client, base_payload(relay_url, mt, target_name="single-turn-model"))
+        check("a model API target is always single-turn on Red",
+              relay.targets.get(run.get("target_id"), {}).get("singleTurn") is True,
+              json.dumps(relay.targets.get(run.get("target_id")))[:200])
+        relay.targets[tid]["singleTurn"] = True  # set on the dashboard; the form leaves it as is
+        run = await run_scan(client, base_payload(relay_url, http_target, target_id=tid, target_name="",
+                                                  strategy={"name": "crescendo", "max_turns": 3}))
+        check("Red's refusal of crescendo on a stored single-turn target is shown",
+              run["status"] == "error" and "single-turn" in str(run.get("error")), json.dumps(run)[:300])
+        relay.turns_per_session = 1
+        await refused("crescendo against a single-turn target", "this target is set to single-turn",
+                      target=http_target, single_turn=True, strategy={"name": "crescendo"})
+        await refused("TRP against a single-turn target", "this target is set to single-turn",
+                      single_turn=True, strategy=trp, objectives=[], custom_objectives=[indirect_obj])
 
     finally:
         await client.aclose()
