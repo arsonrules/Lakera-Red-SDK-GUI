@@ -61,6 +61,13 @@ In the UI, set **Lakera Red API URL** to `http://127.0.0.1:8803`, **URL** to
 For a streaming target, use URL `http://127.0.0.1:8801/sse-chat` with **SSE stream URL**
 `http://127.0.0.1:8801/sse`.
 
+To see tool-response poisoning work end to end, use URL `http://127.0.0.1:8801/agent`
+with **Response path** `reply`. Then open **How it works → Scenario: tool-response
+poisoning**, press **Set up this scan**, and run it. The demo agent reports its
+`read_inbox` tool through `intercept_tool`. The mock relay plants an instruction in that
+result, and the agent obeys it by emailing the inbox to `attacker@evil.example`. The
+result is a successful attack, judged from the tool calls the agent reported.
+
 ## Using the UI
 
 The page has two views. On a narrow screen they appear as the **Configure** and **Run**

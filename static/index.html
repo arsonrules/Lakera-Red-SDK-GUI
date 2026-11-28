@@ -160,6 +160,11 @@
   #pane-guide .hint { margin:10px 0 12px; max-width:72ch; }
   .dg-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
   .dg-actions .hint { margin:0; }
+  .dg-agent { margin-bottom:12px; max-width:760px; }
+  .dg-agent summary { cursor:pointer; font-size:13px; }
+  .snippet { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+  .snippet pre { align-self:stretch; margin:0; padding:10px 12px; overflow-x:auto; background:var(--panel2);
+                 border:1px solid var(--line); border-radius:6px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
   .dg-scroll { overflow-x:auto; }
   .dg-scroll svg { display:block; width:100%; min-width:960px; max-width:1200px; }
   #convs:empty::before, #log:empty::before, #results:empty::before { display:block; padding:28px 0;
@@ -761,6 +766,27 @@
         <button type="button" class="small" id="dg-setup">Set up this scan</button>
         <span class="hint" id="dg-setup-msg" role="status" aria-live="polite"></span>
       </div>
+      <details class="dg-agent">
+        <summary>Your agent's side: report tool calls with <code>intercept_tool</code></summary>
+        <p class="hint">In your agent's runtime set <code>LAKERA_RED_TOOL_INTERCEPT=true</code>,
+          <code>LAKERA_RED_API_KEY</code> and <code>LAKERA_RED_URL</code>. Wrap each tool and use the result
+          <code>intercept_tool</code> returns: during a scan Red may have planted instructions in it. With the
+          switch off it hands the result back unchanged. If your agent reports no tool calls, Red has nothing
+          to poison, so a "not successful" verdict says nothing about how it handles tool data.</p>
+        <div class="snippet">
+          <button type="button" class="ghost small" id="agent-snippet-copy">Copy</button>
+<pre id="agent-snippet">from lakera_red_sdk import intercept_tool
+
+@app.post("/chat")
+async def chat(request: Request):
+    session_id = request.headers.get("X-Session-Id", "")  # the runner's {{session_id}}
+    ...
+    inbox = read_inbox()  # your real tool
+    inbox = await intercept_tool(  # report the call, then use what comes back
+        tool_name="read_inbox", tool_arguments="{}", result=inbox, session_id=session_id)
+    ...</pre>
+        </div>
+      </details>
       <div class="dg-scroll"><svg viewBox="0 0 960 724" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="trp-sequence-title trp-sequence-desc">
         <title id="trp-sequence-title">How a tool-response-poisoning attack runs</title>
         <desc id="trp-sequence-desc">One tool-response-poisoning attack, repeated per attack. Turn 1: Red sends a greeting for session S; the runner forwards it to your agent with S in the session_id placeholder and returns the reply with S, which binds S to the scan. Turn 2: Red sends a trigger request; your agent calls a tool, whose intercept_tool wrapper reports the tool event with S to Red. Red answers with a poisoned tool result, which the tool hands back to your agent; your agent's reply goes back through the runner to Red, which judges it.</desc>
@@ -1690,6 +1716,13 @@ function showDiagram(name) {
   });
 }
 ["arch", "trp"].forEach(d => { $(`dg-${d}`).onclick = () => showDiagram(d); });
+
+$("agent-snippet-copy").onclick = async () => {
+  const btn = $("agent-snippet-copy");
+  try { await navigator.clipboard.writeText($("agent-snippet").textContent); btn.textContent = "Copied"; }
+  catch { btn.textContent = "Select it to copy"; }  // no clipboard access (e.g. plain http on a LAN address)
+  setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+};
 
 // Set up this scan: switch the form to tool-response-poisoning, keeping what is already filled in.
 const TRP_EXAMPLE = [{key: "example.trp.email-outside.1", name: "Example: email sent outside the company",
