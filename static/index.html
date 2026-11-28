@@ -979,8 +979,8 @@ async def chat(request: Request):
             built-in ID; a name of 1–200 characters; <code>additional_context</code> up to 1500.</li>
           <li><b>Breaking:</b> <code>CustomObjective.category_id</code> is gone (it never had an effect), so the 7th
             positional argument is now <code>runs_with_direct_attacks</code>. Pass fields by keyword.</li>
-        </ul><p class="runner">In this runner: the objective limits and the built-in rule are already checked before a scan
-          starts. Datasets, per-mode objectives and single-turn targets arrive with the upgrade to 0.13.</p></article>
+        </ul><p class="runner">In this runner: the objective limits and the built-in rule are checked before a scan starts,
+          and objectives are passed by keyword. Datasets, per-mode objectives and single-turn targets aren't in the form yet.</p></article>
         <article data-version="0.12.0"><h3>0.12.0 <small>2026-10-19</small></h3><ul>
           <li><b>Agent threat modeling:</b> <code>infer_topology</code> assesses the agent's weaknesses from its ground truth,
             and <code>generate_objectives</code> makes one objective per weakness. <code>get_topology</code> and

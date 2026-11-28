@@ -1,7 +1,7 @@
 # Lakera Red Runner
 
 A web UI and small API for running [Check Point AI Red Teaming](https://docs.lakera.ai/docs/red/sdk-quickstart)
-(`lakera-red-sdk` 0.12.x, shown next to the title in the UI) scans against any chat endpoint. Fill in the target, start a scan,
+(`lakera-red-sdk` 0.13.x, shown next to the title in the UI) scans against any chat endpoint. Fill in the target, start a scan,
 and watch the attacks and your agent's replies as they happen. When the scan finishes,
 read the verdicts and export them.
 
@@ -468,6 +468,12 @@ example 0.12 → 0.13), update the UI in the same change. Don't bump only the pi
 
 1. Confirm the release is on PyPI (`pip index versions lakera-red-sdk`), then change the pin
    in `requirements.txt` (`lakera-red-sdk~=0.13.0`) and reinstall.
+
+   0.13.0 is the exception for now: Lakera published its Python build to TestPyPI only, so
+   `requirements.txt` links that exact wheel, and pip refuses any file whose SHA-256 differs.
+   Before pinning it, the wheel was compared with 0.12.0 from PyPI. The network, key and
+   tool-tracing modules are byte-identical, and the rest changes only as the changelog says.
+   Once 0.13 is on PyPI, replace that line with `lakera-red-sdk~=0.13.0`.
 2. Read the SDK's changelog and diff its public API (`intercept_tool`, the scan config
    models, strategy and objective names). Then follow each change through the UI:
    - New or renamed fields go in the form and in `app.py`'s request model.

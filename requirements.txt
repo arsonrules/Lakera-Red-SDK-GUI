@@ -1,4 +1,6 @@
-lakera-red-sdk~=0.12.0
+# lakera-red-sdk 0.13.0 is on TestPyPI only so far. This is that exact file, checked against its SHA-256;
+# once 0.13 is on PyPI, replace the line with: lakera-red-sdk~=0.13.0
+lakera-red-sdk @ https://test-files.pythonhosted.org/packages/11/36/62bab84840afadef0036ba8ec27dc336d77f4135a41ab54b82401652de2b/lakera_red_sdk-0.13.0-py3-none-any.whl#sha256=5b10aa46b1f072c3afd0f72b9a9758926bd8e363dcc66c3cd6c2245fb8d75ed4
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
