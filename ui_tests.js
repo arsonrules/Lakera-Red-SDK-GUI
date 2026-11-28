@@ -65,7 +65,9 @@ async function uiTests() {
   // ---- header, shortcuts, themes
   check("header: shows the Red key status", /^Red key: /.test($("hs-key").textContent) && !!$("hs-key").dataset.s,
     $("hs-key").textContent);
-  check("header: shows the installed SDK version", /^SDK v0\.12\.\d+$/.test($("sdkver").textContent), $("sdkver").textContent);
+  const sdk = (await fetch("/api/config").then(r => r.json())).sdk_version;  // the pin itself is test_all.py's check
+  check("header: shows the installed SDK version", $("sdkver").textContent === `SDK v${sdk}` && /^\d+\.\d+\.\d+/.test(sdk),
+    `${$("sdkver").textContent} vs ${sdk}`);
   check("reply timeout is bounded to Red's 1–480 s", $("response_timeout_seconds").min === "1"
     && $("response_timeout_seconds").max === "480");
   document.activeElement?.blur();

@@ -934,8 +934,9 @@ async def main() -> int:
               str(len(objectives)))
         cfg = (await client.get("/api/config")).json()
         check("config exposes the default base URL", "lakera" in cfg["base_url"], str(cfg))
-        check("config reports the installed SDK version (0.12.x)",
-              cfg.get("sdk_version", "").startswith("0.12."), str(cfg))
+        pinned = re.search(r"lakera-red-sdk~=(\d+\.\d+)", (Path(__file__).parent / "requirements.txt").read_text())[1]
+        check(f"config reports the installed SDK version (pinned {pinned}.x)",
+              cfg.get("sdk_version", "").startswith(pinned + "."), str(cfg))
         page = await client.get("/")
         check("UI page served", page.status_code == 200 and "Lakera Red Runner" in page.text,
               str(page.status_code))
