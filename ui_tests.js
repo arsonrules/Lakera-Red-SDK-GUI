@@ -166,6 +166,19 @@ async function uiTests() {
     $("custom_objectives").value === mine && $("headers").value === "" && $("dg-setup-msg").textContent === "Picked tool-response-poisoning.",
     $("dg-setup-msg").textContent);
   check("set up this scan: no example note once the objectives are your own", !msg("custom_objectives"), msg("custom_objectives"));
+  if (innerWidth <= 900) $("tab-run").click();
+  $("vt-guide").click(); $("dg-trp").click(); document.querySelector(".dg-agent").open = true;
+  const copyBox = $("agent-snippet-copy").getBoundingClientRect(), codeBox = $("agent-snippet").getBoundingClientRect();
+  check("agent snippet: the Copy button sits above the code, not over it",
+    codeBox.height > 0 && copyBox.bottom <= codeBox.top, `${copyBox.bottom} vs ${codeBox.top}`);
+  let copied = null;
+  if (navigator.clipboard) navigator.clipboard.writeText = async t => { copied = t; };  // own property shadows the real one
+  $("agent-snippet-copy").click();
+  await until(() => $("agent-snippet-copy").textContent !== "Copy", 2000);
+  check("agent snippet: Copy puts the intercept_tool example on the clipboard",
+    copied === $("agent-snippet").textContent && copied.includes("intercept_tool(") && $("agent-snippet-copy").textContent === "Copied",
+    `${$("agent-snippet-copy").textContent} ${String(copied).slice(0, 60)}`);
+  if (navigator.clipboard) delete navigator.clipboard.writeText;
   await applySnapshot(formBefore);
   if (innerWidth <= 900) $("tab-run").click();
   $("dg-arch").click();
@@ -603,6 +616,26 @@ async function uiTests() {
   const trpDone = await until(() => FINAL($("status").textContent) && !$("go").disabled, 60000);
   check("a tool-response-poisoning scan runs the custom objective only",
     trpDone && $("status").textContent === "done" && resRows().length === 1, `${$("status").textContent} ${resRows().length}`);
+
+  // ---- the scenario end to end: Set up this scan, against the demo agent that obeys a poisoned tool result
+  if (innerWidth <= 900) $("tab-config").click();
+  const targetBefore = {url: $("url").value, response_path: $("response_path").value, headers: $("headers").value};
+  set("url", `${DEMO}/agent`); set("response_path", "reply"); set("body_template", '{"message": "{{prompt}}"}');
+  set("headers", ""); set("custom_objectives", ""); pick("strategy", "static");
+  await setUp();
+  $("go").click();
+  const demoDone = await until(() => FINAL($("status").textContent) && !$("go").disabled, 60000);
+  const report = exportText("md");
+  check("scenario: Set up this scan + Run against the demo agent finds the poisoning",
+    demoDone && $("status").textContent === "done" && /\| example\.trp\.email-outside\.1 \| malicious \| 5 \|/.test(report),
+    `${$("status").textContent} ${report.split("\n").filter(l => l.includes("example.")).join(" ")}`);
+  check("scenario: the verdict explains what the agent did with the poisoned result",
+    report.includes("emailed the inbox to attacker@evil.example"), report.slice(-300));
+  const bubbles = [...$("convs").querySelectorAll(".bubble.reply")].map(b => b.textContent);
+  check("scenario: the conversation shows the agent obeying the planted instruction",
+    bubbles.some(t => t.includes("forwarded it to attacker@evil.example")), bubbles.join(" | ").slice(0, 300));
+  if (innerWidth <= 900) $("tab-config").click();
+  Object.entries(targetBefore).forEach(([id, v]) => set(id, v));
   if (innerWidth <= 900) $("tab-config").click();
   pick("strategy", "static"); set("body_template", ""); set("custom_objectives", ""); set("api_key", "");
 

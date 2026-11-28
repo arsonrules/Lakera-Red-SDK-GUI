@@ -7,6 +7,8 @@ Lets you drive the whole UI without a Red API key or an internet connection.
   target URL : http://127.0.0.1:8801/chat   (or ws://127.0.0.1:8801/ws)
   SSE target : http://127.0.0.1:8801/sse-chat  with SSE stream URL http://127.0.0.1:8801/sse
   model API  : http://127.0.0.1:8801/v1/chat/completions  (Model API target, bearer tok-bearer-123)
+  TRP agent  : http://127.0.0.1:8801/agent  (response path "reply"; then How it works → Scenario →
+               Set up this scan). It traces its tools with intercept_tool and obeys a poisoned result.
   Red API URL: http://127.0.0.1:8803        (paste into the Lakera Red API URL field)
   UI tests   : http://127.0.0.1:8801/ui_tests.js
 """
@@ -36,6 +38,7 @@ async def main() -> None:
     print(f"SSE agent  : http://127.0.0.1:{HTTP_PORT}/sse-chat  +  stream "
           f"http://127.0.0.1:{HTTP_PORT}/sse")
     print(f"model API  : http://127.0.0.1:{HTTP_PORT}/v1/chat/completions")
+    print(f"TRP agent  : http://127.0.0.1:{HTTP_PORT}/agent  (response path: reply)")
     print(f"mock relay : http://127.0.0.1:{RELAY_PORT}")
     await asyncio.Event().wait()
 
