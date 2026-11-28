@@ -121,7 +121,19 @@ async function uiTests() {
   $("dg-trp").click();
   check("how it works: the scenario tab swaps in the sequence", visible($("dg-trp-panel")) && $("dg-arch-panel").hidden
     && $("dg-trp").getAttribute("aria-selected") === "true" && $("dg-arch").getAttribute("aria-selected") === "false");
-  const ids = [...document.querySelectorAll("[id]")].map(e => e.id);
+  $("dg-log").click();
+  const logTags = [...$("sdk-log").querySelectorAll("article")].map(a => [a.dataset.version, a.querySelector(".log-tag")?.textContent || ""]);
+  const minorOf = v => v.split(".").slice(0, 2).join(".");
+  check("sdk changelog: its tab swaps in the release list", visible($("dg-log-panel")) && $("dg-trp-panel").hidden
+    && $("dg-log").getAttribute("aria-selected") === "true");
+  check("sdk changelog: tags the installed release once, and every newer one as not installed yet",
+    logTags.filter(([v, t]) => t === "Installed").map(([v]) => minorOf(v)).join() === minorOf(sdk)
+    && logTags.every(([v, t], i) => t === (i < logTags.findIndex(([w]) => minorOf(w) === minorOf(sdk)) ? "Not installed yet" : minorOf(v) === minorOf(sdk) ? "Installed" : "")),
+    JSON.stringify(logTags.slice(0, 3)));
+  check("sdk changelog: nothing overflows sideways", $("dg-log-panel").scrollWidth <= $("dg-log-panel").clientWidth + 1,
+    `${$("dg-log-panel").scrollWidth} > ${$("dg-log-panel").clientWidth}`);
+  $("dg-trp").click();
+  const ids =[...document.querySelectorAll("[id]")].map(e => e.id);
   check("how it works: no id is used twice on the page", new Set(ids).size === ids.length,
     ids.filter((id, i) => ids.indexOf(id) !== i).join(", "));
   const refs = [...$("pane-guide").querySelectorAll("[marker-end]")]

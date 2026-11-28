@@ -158,6 +158,15 @@
   #dg-tabs { display:flex; gap:6px; flex-wrap:wrap; }
   #dg-tabs button[aria-selected=true] { border-color:var(--accent); }
   #pane-guide .hint { margin:10px 0 12px; max-width:72ch; }
+  #sdk-log { max-width:80ch; }
+  #sdk-log article { border-top:1px solid var(--line); padding:10px 0 4px; }
+  #sdk-log h3 { margin:0 0 4px; font-size:15px; display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  #sdk-log h3 small { color:var(--dim); font-weight:normal; font-size:12px; }
+  #sdk-log ul { margin:4px 0; padding-left:20px; font-size:13px; line-height:1.5; }
+  #sdk-log .runner { margin:4px 0 6px; font-size:12px; color:var(--dim); }
+  #sdk-log code { overflow-wrap:anywhere; }
+  .log-tag { font-size:11px; font-weight:normal; padding:1px 7px; border-radius:99px; border:1px solid var(--accent); color:var(--fg); }
+  #sdk-log article.ahead .log-tag { border-color:var(--dim); color:var(--dim); }
   .dg-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
   .dg-actions .hint { margin:0; }
   .dg-agent { margin-bottom:12px; max-width:760px; }
@@ -594,6 +603,7 @@
     <div id="dg-tabs" role="tablist" aria-label="Illustration">
       <button type="button" class="ghost small" role="tab" id="dg-arch" aria-controls="dg-arch-panel" aria-selected="true">Architecture</button>
       <button type="button" class="ghost small" role="tab" id="dg-trp" aria-controls="dg-trp-panel" aria-selected="false">Scenario: tool-response poisoning</button>
+      <button type="button" class="ghost small" role="tab" id="dg-log" aria-controls="dg-log-panel" aria-selected="false">SDK changelog</button>
     </div>
     <div id="dg-arch-panel" role="tabpanel" aria-labelledby="dg-arch">
       <p class="hint">How a scan moves through the runner. It only calls out: it polls Red for attacks and
@@ -947,6 +957,72 @@ async def chat(request: Request):
         <rect x="700" y="690" width="8" height="14" fill="rgba(31,35,40,0.06)" stroke="#59636e" stroke-width="0.8"/>
         <text x="716" y="700" fill="#59636e" font-size="8.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, sans-serif">Busy with a request</text>
       </svg></div>
+    </div>
+    <!-- One entry per Python release of lakera-red-sdk, from Red's SDK changelog. test_all.py checks the
+         pinned version has an entry, so bumping the pin means adding its entry here (README: Updating the SDK). -->
+    <div id="dg-log-panel" role="tabpanel" aria-labelledby="dg-log" hidden>
+      <p class="hint">What each Python release of <code>lakera-red-sdk</code> added, and what this runner does with it.
+        Source: <a href="https://docs.lakera.ai/docs/red/sdk-changelog" target="_blank" rel="noopener">Red SDK changelog</a>.
+        <span id="log-installed"></span></p>
+      <div id="sdk-log">
+        <article data-version="0.13.0"><h3>0.13.0 <small>2026-11-20</small></h3><ul>
+          <li><b>Custom datasets:</b> <code>upload_dataset</code> (a CSV in the dataset template, or a list of
+            <code>DatasetTestInput</code>), <code>list_datasets</code>, <code>get_dataset</code>, <code>update_dataset</code>
+            (rename) and <code>delete_dataset</code>. <code>create_scan(dataset_id=…)</code> sends each conversation's
+            prompts in order, one session per conversation, judged as prompt injection. Results carry <code>conversation_id</code>.</li>
+          <li><b>Objectives per attack mode:</b> <code>CustomObjective.runs_with_direct_attacks</code> (static, crescendo)
+            and <code>runs_with_indirect_attacks</code> (tool-response-poisoning). Unset runs in every mode; both false is refused.</li>
+          <li><b>Single-turn targets:</b> <code>single_turn</code> on <code>create_or_get_target</code> and
+            <code>update_target</code>. Static sends one prompt per session; crescendo and tool-response-poisoning refuse it.</li>
+          <li>Built-in Safety, Security and Responsible objectives run only in direct attacks.</li>
+          <li>Stricter custom objectives: a key of 1–128 letters, digits, <code>. _ : -</code>, unique in the scan and not a
+            built-in ID; a name of 1–200 characters; <code>additional_context</code> up to 1500.</li>
+          <li><b>Breaking:</b> <code>CustomObjective.category_id</code> is gone (it never had an effect), so the 7th
+            positional argument is now <code>runs_with_direct_attacks</code>. Pass fields by keyword.</li>
+        </ul><p class="runner">In this runner: the objective limits and the built-in rule are already checked before a scan
+          starts. Datasets, per-mode objectives and single-turn targets arrive with the upgrade to 0.13.</p></article>
+        <article data-version="0.12.0"><h3>0.12.0 <small>2026-10-19</small></h3><ul>
+          <li><b>Agent threat modeling:</b> <code>infer_topology</code> assesses the agent's weaknesses from its ground truth,
+            and <code>generate_objectives</code> makes one objective per weakness. <code>get_topology</code> and
+            <code>get_generated_objectives</code> read the stored results. Needs threat modeling on the account.</li>
+        </ul><p class="runner">In this runner: <b>Add objectives from agent threat modeling</b> under objectives.</p></article>
+        <article data-version="0.11.0"><h3>0.11.0 <small>2026-10-05</small></h3><ul>
+          <li><b>Tool-response poisoning</b> strategy (<code>ToolResponsePoisoningStrategyOptions</code>): Red plants an
+            instruction in the result <code>intercept_tool</code> returns. Outside a scan the real result comes back.</li>
+          <li><b>Breaking:</b> <code>session.set_conversation_id</code> is now <code>set_session_id</code>, and
+            <code>intercept_tool</code>'s <code>conversation_id</code> is now <code>session_id</code>.</li>
+          <li>New <code>session.relay_session_id</code> (<code>session.id</code> stays as an alias) and <code>session.session_id</code>.</li>
+        </ul><p class="runner">In this runner: the tool-response-poisoning strategy and the <code>{{session_id}}</code> placeholder.</p></article>
+        <article data-version="0.10.0"><h3>0.10.0 <small>2026-10-02</small></h3><ul>
+          <li><code>response_timeout_seconds</code> on targets: 1–480 seconds, default 300.</li>
+          <li>Scans no longer stop early against slow targets, and a handler is cancelled once Red stops waiting for its reply.</li>
+          <li><b>Tool tracing:</b> <code>intercept_tool</code> reports tool calls, off unless <code>LAKERA_RED_TOOL_INTERCEPT</code> is set.</li>
+        </ul><p class="runner">In this runner: the <b>Reply timeout</b> field.</p></article>
+        <article data-version="0.9.0"><h3>0.9.0 <small>2026-09-03</small></h3><ul>
+          <li>Results are typed: <code>Evaluation</code> (<code>attack_success_indicator</code>, <code>attack_success_score</code>
+            0–5, <code>explanation</code>) and <code>is_successful</code>, the verdict the dashboard shows.</li>
+        </ul><p class="runner">In this runner: the verdicts, scores and explanations in Results.</p></article>
+        <article data-version="0.8.0"><h3>0.8.0 <small>2026-08-14</small></h3><ul>
+          <li><b>Ground truth</b> for targets: <code>ground_truth</code> (a system prompt and tool definitions), or the same
+            fields in <code>app_context_file</code>.</li>
+        </ul></article>
+        <article data-version="0.7.0"><h3>0.7.0 <small>2026-07-27</small></h3><ul>
+          <li><b>Breaking:</b> the recon profile moves to the target (<code>app_context</code> or <code>app_context_file</code>
+            on <code>create_or_get_target</code>), and <code>create_scan</code> names the target instead.</li>
+          <li><b>Breaking:</b> <code>create_target</code> is now <code>create_or_get_target</code>, which reuses a target of the same name.</li>
+        </ul></article>
+        <article data-version="0.6.0"><h3>0.6.0 <small>2026-07-09</small></h3><ul>
+          <li><b>Breaking:</b> <code>ReconContext.allowed_actions</code> and <code>forbidden_actions</code> are lists of strings.</li>
+        </ul></article>
+        <article data-version="0.3.0"><h3>0.3.0 <small>2026-07-09</small></h3><ul>
+          <li><code>custom_objectives</code> in scan options, alongside built-in objective IDs.</li>
+          <li><code>language</code> in scan options, such as <code>"fr"</code> or <code>"de"</code> (default <code>"en"</code>).</li>
+        </ul></article>
+        <article data-version="0.2.0"><h3>0.2.0 <small>2026-06-19</small></h3><ul>
+          <li><code>get_dashboard_link</code>, and runnable <code>echo</code> and <code>chatbot</code> examples.</li>
+        </ul></article>
+        <article data-version="0.1.0"><h3>0.1.0 <small>2026-06-19</small></h3><ul><li>First Python release.</li></ul></article>
+      </div>
     </div>
   </div>
 </section>
@@ -1311,6 +1387,7 @@ Promise.all([fetch("/api/config").then(r => r.json()), fetch("/api/objectives").
   .then(async ([c, list]) => {
     $("base_url").value = c.base_url;
     $("sdkver").textContent = "SDK v" + c.sdk_version;
+    markSdkLog(c.sdk_version);
     hasEnvKey = c.has_env_key;
     $("keyhint").textContent = c.has_env_key
       ? "LAKERA_RED_API_KEY found in the server environment — leave blank to use it."
@@ -1731,12 +1808,29 @@ document.querySelectorAll("#pane-guide [fill], #pane-guide [stroke]").forEach(el
   if (name) el.style[a] = m ? `color-mix(in srgb, var(${name}) ${Math.round(m[2] * 100)}%, transparent)` : `var(${name})`;
 }));
 function showDiagram(name) {
-  ["arch", "trp"].forEach(d => {
+  ["arch", "trp", "log"].forEach(d => {
     $(`dg-${d}-panel`).hidden = d !== name;
     $(`dg-${d}`).setAttribute("aria-selected", d === name);
   });
 }
-["arch", "trp"].forEach(d => { $(`dg-${d}`).onclick = () => showDiagram(d); });
+["arch", "trp", "log"].forEach(d => { $(`dg-${d}`).onclick = () => showDiagram(d); });
+
+// SDK changelog: tag the installed release, and releases newer than it.
+function markSdkLog(installed) {
+  const parts = v => v.split(".").map(Number), newer = (a, b) => {
+    const [x, y] = [parts(a), parts(b)];
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false;
+  };
+  const minor = v => v.split(".").slice(0, 2).join(".");
+  document.querySelectorAll("#sdk-log article").forEach(a => {
+    const v = a.dataset.version, tag = minor(v) === minor(installed) ? "Installed" : newer(v, installed) ? "Not installed yet" : "";
+    a.querySelector(".log-tag")?.remove();
+    a.classList.toggle("ahead", tag === "Not installed yet");
+    if (tag) a.querySelector("h3").append(h("span", {className: "log-tag", textContent: tag}));
+  });
+  $("log-installed").textContent = `This runner has v${installed} installed.`;
+}
 
 $("agent-snippet-copy").onclick = async () => {
   const btn = $("agent-snippet-copy");
