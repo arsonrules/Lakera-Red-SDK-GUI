@@ -492,8 +492,31 @@
     <div class="body">
       <label for="scan_name">Scan name</label>
       <input type="text" id="scan_name" value="web-service scan">
+      <label for="dataset_id">Dataset <span class="hint" style="display:inline">(optional: runs your own prompts instead of attacks)</span></label>
+      <div class="objtools">
+        <select id="dataset_id" data-no-save><option value="">None: attack with a strategy and objectives</option></select>
+        <button type="button" class="ghost small" id="ds_load" title="Load the datasets your Red API key reaches">Load</button>
+        <button type="button" class="ghost small" id="ds_delete" disabled>Delete</button>
+      </div>
+      <div class="hint" id="ds_note" hidden>A dataset scan sends each conversation's prompts unchanged, in order, one
+        session per conversation, and Red judges each conversation as prompt injection. Strategy, language and
+        objectives don't apply.</div>
+      <details id="ds_upload_box">
+        <summary>Upload a dataset (CSV)</summary>
+        <div class="hint">The dataset template: a header row with <code>conversationId</code> and <code>prompt</code>
+          columns, and an optional <code>id</code>. Rows that share a <code>conversationId</code> form one conversation,
+          sent in order. Save it as UTF-8. A dataset's prompts can't be changed after upload.</div>
+        <div class="row">
+          <div><label for="ds_name">Name</label><input type="text" id="ds_name" maxlength="200" placeholder="blank = file name" data-no-save></div>
+          <div><label for="ds_desc">Description (optional)</label><input type="text" id="ds_desc" data-no-save></div>
+        </div>
+        <label for="ds_file">CSV file</label>
+        <input type="file" id="ds_file" accept=".csv,text/csv">
+        <button type="button" class="small" id="ds_upload">Upload</button>
+      </details>
+      <div id="ds_msg" class="hint" role="status" aria-live="polite"></div>
       <div class="row">
-        <div><label for="strategy">Strategy</label>
+        <div id="strategy_box"><label for="strategy">Strategy</label>
           <select id="strategy">
             <option value="static">static — fixed probes</option>
             <option value="crescendo">crescendo — multi-turn escalation</option>
@@ -514,6 +537,7 @@
         <div class="hint">For an endpoint that keeps no conversation history: Red sends each static attack
           as one message in its own session. Saved on the target. A model API target is always single-turn.</div>
       </div>
+      <div id="attack_box">
       <div id="p_static" class="row">
         <div><label for="number_of_probes">Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
       </div>
@@ -565,6 +589,7 @@
         (Target profile, or the model's system prompt), finds its weaknesses and adds one objective per
         weakness to this scan. A stored topology is reused until the ground truth changes. Needs agent
         threat modeling enabled for your Red account; not for smoke.</div>
+      </div>
     </div>
   </details>
 
@@ -990,7 +1015,7 @@ async def chat(request: Request):
         </ul><p class="runner">In this runner: <b>Single-turn target</b> under Scan (model API targets always are). The
           objective limits, the built-in rule and <code>runs_with_direct_attacks</code> /
           <code>runs_with_indirect_attacks</code> in Custom objectives are checked before a scan starts.
-          Datasets aren't in the form yet.</p></article>
+          <b>Dataset</b> under Scan loads, uploads, picks and deletes datasets, and Results show one row per conversation.</p></article>
         <article data-version="0.12.0"><h3>0.12.0 <small>2026-10-19</small></h3><ul>
           <li><b>Agent threat modeling:</b> <code>infer_topology</code> assesses the agent's weaknesses from its ground truth,
             and <code>generate_objectives</code> makes one objective per weakness. <code>get_topology</code> and
@@ -1129,8 +1154,13 @@ const BODY_HINTS = {
   endpoint: '<code>{{prompt}}</code> = current turn, <code>{{messages}}</code> = full [{role,content}] history (use it for multi-turn crescendo scans). <code>{{session_id}}</code> = the id of this session, for an agent that traces its tools (needed for tool-response-poisoning; also works in a header value).',
   model: '<code>{{model}}</code> = model name, <code>{{system_prompt}}</code> = system prompt, <code>{{prompt}}</code> = the attack, <code>{{messages}}</code> = [system, user] for this single turn.',
 };
-const TRP = "tool-response-poisoning", isTrp = () => $("strategy").value === TRP;
+const TRP = "tool-response-poisoning", isTrp = () => !isDataset() && $("strategy").value === TRP;
+const isDataset = () => !!$("dataset_id").value;  // a dataset scan has no strategy or objectives
 function refresh() {
+  const ds = isDataset();
+  ["strategy_box", "attack_box"].forEach(id => { $(id).hidden = ds; });
+  $("ds_note").hidden = !ds;
+  $("ds_delete").disabled = !ds;
   const auth = $("auth_type").value, ca = $("ca_mode").value;
   const ws = /^wss?:/i.test($("url").value.trim());
   const model = isModel(), fmt = $("api_format").value, preset = model && fmt !== "custom";
@@ -1174,7 +1204,7 @@ function refresh() {
   $("ca_upload_box").hidden = ca !== "upload";
   updateSummaries();
 }
-["auth_type", "strategy", "target_kind", "api_format", "threat_model", "single_turn"].forEach(id => $(id).addEventListener("change", refresh));
+["auth_type", "strategy", "target_kind", "api_format", "threat_model", "single_turn", "dataset_id"].forEach(id => $(id).addEventListener("change", refresh));
 ["url", "stream_url"].forEach(id => $(id).addEventListener("input", refresh));
 $("ca_mode").addEventListener("change", () => { refresh(); if ($("ca_mode").value === "upload") loadStoredCAs(); });
 
@@ -1202,6 +1232,8 @@ const SUMMARIES = {
   "sec-profile": () => [$("target_id").value.trim() || $("target_name").value.trim(),
                         $("app_description").value.trim() ? "described" : "recon"],
   "sec-scan": () => {
+    if (isDataset()) return [`dataset: ${$("dataset_id").selectedOptions[0]?.textContent.split(" — ")[0]}`,
+                             !isModel() && $("single_turn").checked ? "single-turn" : ""];
     const s = $("strategy").value, n = objBoxes().filter(c => c.checked).length;
     return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns`
               : s === TRP ? `${$("attacks_per_objective").value} attack(s)` : "",
@@ -1283,6 +1315,54 @@ function persisted() {
   return [...$("form").querySelectorAll("input, select, textarea")].filter(el =>
     el.id && !SECRETS.has(el.id) && el.type !== "file" && !("noSave" in el.dataset));
 }
+// Datasets (SDK 0.13): your own prompts, uploaded to Red and run in place of attacks.
+let datasets = [];
+async function redPost(path, extra) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({api_key: $("api_key").value, base_url: $("base_url").value.trim(), ...extra})});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? data));
+  return data;
+}
+function showDatasets(pick) {
+  $("dataset_id").replaceChildren(new Option("None: attack with a strategy and objectives", ""), ...datasets.map(d =>
+    new Option(`${d.name} — ${d.conversation_count} conversation(s), ${d.test_count} prompt(s)`, d.dataset_id)));
+  $("dataset_id").value = datasets.some(d => d.dataset_id === pick) ? pick : "";
+  refresh();
+}
+async function loadDatasets(pick = $("dataset_id").value) {
+  $("ds_msg").textContent = "Loading datasets…";
+  try {
+    datasets = await redPost("/api/datasets/list", {});
+    showDatasets(pick);
+    $("ds_msg").textContent = datasets.length ? `${datasets.length} dataset(s) on Red.` : "No datasets yet: upload one below.";
+  } catch (e) { $("ds_msg").textContent = `Could not load datasets: ${e.message}`; }
+}
+$("ds_load").onclick = () => loadDatasets();
+$("ds_upload").onclick = async () => {
+  const file = $("ds_file").files[0];
+  if (!file) { $("ds_msg").textContent = "Choose a CSV file first."; return; }
+  $("ds_msg").textContent = "Uploading…";
+  try {
+    const d = await redPost("/api/datasets/upload", {name: $("ds_name").value.trim() || file.name.replace(/\.csv$/i, ""),
+      description: $("ds_desc").value.trim() || null, csv: await file.text()});
+    datasets = [d, ...datasets.filter(x => x.dataset_id !== d.dataset_id)];
+    showDatasets(d.dataset_id);
+    ["ds_file", "ds_name", "ds_desc"].forEach(id => { $(id).value = ""; });
+    $("ds_msg").textContent = `Uploaded “${d.name}”: ${d.conversation_count} conversation(s), ${d.test_count} prompt(s). Picked for this scan.`;
+  } catch (e) { $("ds_msg").textContent = `Upload failed: ${e.message}`; }
+};
+$("ds_delete").onclick = async () => {
+  const d = datasets.find(x => x.dataset_id === $("dataset_id").value);
+  if (!d || !confirm(`Delete the dataset “${d.name}” from Red? Past scan reports keep their results. This can't be undone.`)) return;
+  try {
+    await redPost("/api/datasets/delete", {dataset_id: d.dataset_id});
+    datasets = datasets.filter(x => x !== d);
+    showDatasets("");
+    $("ds_msg").textContent = `Deleted “${d.name}”.`;
+  } catch (e) { $("ds_msg").textContent = `Delete failed: ${e.message}`; }
+};
+
 function snapshot() {
   const s = {};
   persisted().forEach(el => { s[el.id] = el.type === "checkbox" ? el.checked : el.value; });
@@ -1445,7 +1525,7 @@ const CHECKS = {
   stream_url: v => v && !/^https?:\/\/[^/\s]/i.test(v) ? "The SSE stream URL must be an http or https URL." : "",
   headers: v => jsonError(v, o => o && typeof o === "object" && !Array.isArray(o)
     && Object.values(o).every(x => typeof x === "string"), 'use an object of strings, e.g. {"X-Env": "staging"}.'),
-  custom_objectives: v => jsonError(v, Array.isArray, "use an array of objective objects.")
+  custom_objectives: v => isDataset() ? "" : jsonError(v, Array.isArray, "use an array of objective objects.")
     || (isTrp() && !$("threat_model").checked && !(v && JSON.parse(v).length)
         ? "tool-response-poisoning needs at least one custom objective — built-in objectives run only in direct attacks." : "")
     || attackModeError(v ? JSON.parse(v) : []),
@@ -1740,7 +1820,7 @@ $("form").onsubmit = async ev => {
       target_name: $("target_name").value.trim(),
       target_id: $("target_id").value.trim(),
       refresh_recon: $("refresh_recon").checked,
-      threat_model: $("threat_model").checked && s !== "smoke",
+      threat_model: $("threat_model").checked && s !== "smoke" && !isDataset(),
       refresh_threat_model: $("refresh_threat_model").checked,
       app_context: {
         app_description: $("app_description").value.trim(),
@@ -1760,8 +1840,9 @@ $("form").onsubmit = async ev => {
         probes: s === "smoke" ? lines($("probes").value) : null,
         number_of_attacks_per_objective: s === TRP ? +$("attacks_per_objective").value : null,
       },
-      objectives: s === TRP ? [] : objBoxes().filter(c => c.checked).map(c => c.value),
-      custom_objectives: parseJSON($("custom_objectives").value, []),
+      objectives: s === TRP || isDataset() ? [] : objBoxes().filter(c => c.checked).map(c => c.value),
+      custom_objectives: isDataset() ? [] : parseJSON($("custom_objectives").value, []),
+      dataset_id: $("dataset_id").value,
       concurrency: +$("concurrency").value,
       language: $("language").value,
       response_timeout_seconds: $("response_timeout_seconds").value ? +$("response_timeout_seconds").value : null,
@@ -1880,6 +1961,7 @@ $("dg-setup").onclick = async () => {
   const fields = {target_kind: "endpoint", strategy: TRP}, did = ["picked tool-response-poisoning"];
   if (isModel()) did.push("switched the target to a chat endpoint");
   if (!isModel() && $("single_turn").checked) { fields.single_turn = false; did.push("turned off single-turn"); }
+  if (isDataset()) { $("dataset_id").value = ""; did.push("cleared the dataset"); }
   if (!$("custom_objectives").value.trim()) {
     fields.custom_objectives = JSON.stringify(TRP_EXAMPLE, null, 2);
     did.push("added an example objective to rewrite for your agent's tools");
@@ -2132,8 +2214,12 @@ function overall(rows) {
   return {broken, unsure, held: rows.length - broken - unsure, cls, word};
 }
 
+// A dataset scan's results are one row per conversation (SDK 0.13), named by its conversation id.
+const rowName = r => r.conversationId ?? r.objectiveId ?? "";
+const unitWord = () => run.snap?.strategy === "dataset" ? "Conversation" : "Objective";
+
 function sortedRows(rows) {
-  const val = {objective: r => r.objectiveId || "", verdict: r => VERDICT_RANK[verdictOf(r)],
+  const val = {objective: rowName, verdict: r => VERDICT_RANK[verdictOf(r)],
                score: r => r.evaluation?.attackSuccessScore ?? -1}[resSort.key];
   return rows.filter(r => RESULT_FILTERS[resFilter](verdictOf(r))).sort((a, b) => {
     const x = val(a), y = val(b);
@@ -2155,7 +2241,7 @@ function renderResults() {
   const summary = h("div", {className: "summary"},
     stat("Lakera Red verdict", h("span", {className: "pill " + o.cls, textContent: o.word})),
     stat("Broken", h("b", {textContent: o.broken})), stat("Held", h("b", {textContent: o.held})),
-    stat("Errored / unscored", h("b", {textContent: o.unsure})), stat("Objectives", h("b", {textContent: rows.length})));
+    stat("Errored / unscored", h("b", {textContent: o.unsure})), stat(unitWord() + "s", h("b", {textContent: rows.length})));
   // An indirect attack can only land through a tool call the agent reported, so "held" is weaker evidence.
   const trpNote = run.snap?.strategy === TRP && o.held > 0 && h("p", {className: "hint", id: "trp-held-note",
     textContent: "Tool-response poisoning: Red judges only the tool calls your agent reported with intercept_tool. " +
@@ -2184,7 +2270,7 @@ function renderResults() {
     const e = r.evaluation || {}, v = verdictOf(r), text = r.error || e.explanation || "";
     const row = h("tr", {className: "res-row", tabIndex: 0},
       h("td", {className: "objective", title: r.objectiveId,
-                textContent: generatedName(r.objectiveId) || r.objectiveId}),
+                textContent: r.conversationId ?? (generatedName(r.objectiveId) || r.objectiveId)}),
       h("td", {}, h("span", {className: "pill " + VERDICT_PILL[v], textContent: v})),
       h("td", {textContent: e.attackSuccessScore ?? "–"}),
       h("td", {}, h("div", {className: "clamp", textContent: text})));
@@ -2199,7 +2285,7 @@ function renderResults() {
     row.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); } };
     return [row, detail];
   }));
-  const table = h("table", {}, h("thead", {}, h("tr", {}, head("objective", "Objective"), head("verdict", "Verdict"),
+  const table = h("table", {}, h("thead", {}, h("tr", {}, head("objective", unitWord()), head("verdict", "Verdict"),
     head("score", "Score"), head(null, "Explanation"))), body);
   $("results").replaceChildren(summary, ...(trpNote ? [trpNote] : []), toolbar, table,
     ...(body.children.length ? [] : [h("p", {className: "hint", textContent: "No result matches this filter."})]));
@@ -2217,15 +2303,15 @@ function exportText(kind) {
   const meta = {run_id: run.id, scan_name: snap.name, target: snap.target, status: snap.status,
                 scan_id: snap.scan_id, target_id: snap.target_id, dashboard: snap.dashboard_link};
   if (kind === "json") return JSON.stringify({...meta, verdict: o.word, results: run.results}, null, 2);
-  if (kind === "csv") return [["objective", "verdict", "score", "explanation"],
-    ...rows.map(r => [r.objectiveId, verdictOf(r), r.evaluation?.attackSuccessScore ?? "", r.error || r.evaluation?.explanation || ""])]
+  if (kind === "csv") return [[unitWord().toLowerCase(), "verdict", "score", "explanation"],
+    ...rows.map(r => [rowName(r), verdictOf(r), r.evaluation?.attackSuccessScore ?? "", r.error || r.evaluation?.explanation || ""])]
     .map(cols => cols.map(csvCell).join(",")).join("\r\n") + "\r\n";
   return [`# Lakera Red scan report — ${mdCell(snap.name || "scan")}`, "",
-    `- **Verdict:** ${o.word} (${o.broken} of ${rows.length} objective(s) broken${o.unsure ? `, ${o.unsure} errored or unscored` : ""})`,
+    `- **Verdict:** ${o.word} (${o.broken} of ${rows.length} ${unitWord().toLowerCase()}(s) broken${o.unsure ? `, ${o.unsure} errored or unscored` : ""})`,
     `- **Target:** ${mdCell(snap.target)}`, `- **Status:** ${mdCell(snap.status)}`,
     snap.scan_id ? `- **Scan:** ${mdCell(snap.scan_id)}` : "", snap.dashboard_link ? `- **Dashboard:** ${snap.dashboard_link}` : "",
-    "", "| Objective | Verdict | Score | Explanation |", "|---|---|---|---|",
-    ...rows.map(r => `| ${mdCell(r.objectiveId)} | ${verdictOf(r)} | ${r.evaluation?.attackSuccessScore ?? "–"} | ${mdCell(r.error || r.evaluation?.explanation)} |`),
+    "", `| ${unitWord()} | Verdict | Score | Explanation |`, "|---|---|---|---|",
+    ...rows.map(r => `| ${mdCell(rowName(r))} | ${verdictOf(r)} | ${r.evaluation?.attackSuccessScore ?? "–"} | ${mdCell(r.error || r.evaluation?.explanation)} |`),
     ""].filter((line, i, all) => line !== "" || all[i - 1] !== "").join("\n");
 }
 function downloadExport(kind) {
