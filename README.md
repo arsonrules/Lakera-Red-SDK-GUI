@@ -173,6 +173,13 @@ the history with `{{messages}}`:
 
 with response path `choices.0.message.content`.
 
+**Single-turn endpoints.** If your endpoint keeps no conversation history and takes no
+`{{messages}}`, tick **Single-turn target** (or send `"single_turn": true`). Red then sends each
+static attack as one message in its own session. Like the reply timeout, it is saved on the
+target; leaving `single_turn` out of an API request keeps the target's value. crescendo and
+tool-response-poisoning need several turns, so the UI greys them out and the API refuses them.
+**Set up this scan** turns it off.
+
 ## Self-trained models
 
 To red-team a model of your own, rather than an app built on one, set **Target type** to
@@ -196,7 +203,8 @@ To red-team a model of your own, rather than an app built on one, set **Target t
   judge scores against the prompt the model actually got.
 
 Every attack is a fresh single-turn request: the system prompt, then the attack, and no
-earlier turns. So multi-turn testing is off for model targets. **crescendo** and
+earlier turns. The runner also marks the target single-turn on Red (`single_turn`, SDK 0.13), so
+Red sends one prompt per session. So multi-turn testing is off for model targets. **crescendo** and
 **tool-response-poisoning** are greyed out in the UI, and the API refuses them with HTTP 400.
 Use **static** or **smoke**.
 
@@ -442,11 +450,15 @@ The server suite runs against real local servers and a mock relay. It covers:
 - agent threat modeling: inference, reuse, staleness, re-infer, the catalogue kept with
   no selection, refusals (smoke, no ground truth), and an account without the feature;
 - model API targets: each API format, every auth method, Fetch models, the system prompt
-  and its use as ground truth, single-turn requests, and crescendo refused.
+  and its use as ground truth, single-turn requests, and crescendo refused;
+- single-turn targets: saved on the target and switched off again on reuse, one prompt
+  per session, always on for model targets, Red's refusal shown, and the runner's own
+  refusals of crescendo and tool-response-poisoning.
 
 The browser test is `ui_tests.js`. It exercises the page itself: layout at desktop and
 phone width, accessibility basics, field checks, the Red API test, the connection test, TLS diagnosis,
-saved configs and templates, the objective picker, tool-response poisoning, How it works
+saved configs and templates, the objective picker, single-turn targets, tool-response
+poisoning, How it works
 and its Set up this scan button, runs, results, export, history and reattach, and the
 theme. It needs `demo_servers.py` running. Serve the file, load the page, and run this in
 the browser console:

@@ -501,7 +501,7 @@
             <option value="tool-response-poisoning">tool-response-poisoning — indirect, via a tool result</option>
           </select>
           <div class="hint" id="strategy_note" hidden>crescendo and tool-response-poisoning need a
-            multi-turn agent, so they are off for a model API target.</div>
+            multi-turn agent, so they are off for a <span id="strategy_note_why">model API</span> target.</div>
         </div>
         <div><label for="concurrency">Concurrency</label><input type="number" id="concurrency" value="3" min="1" max="20"></div>
         <div><label for="response_timeout_seconds">Reply timeout (s, 1–480)</label>
@@ -509,6 +509,11 @@
       </div>
       <div class="hint">How long Red waits for each reply; on expiry that objective is marked
         <em>timeout</em> and the scan moves on. Saved on the target. Blank keeps the target's value.</div>
+      <div id="single_turn_box">
+        <label class="inline"><input type="checkbox" id="single_turn"> Single-turn target</label>
+        <div class="hint">For an endpoint that keeps no conversation history: Red sends each static attack
+          as one message in its own session. Saved on the target. A model API target is always single-turn.</div>
+      </div>
       <div id="p_static" class="row">
         <div><label for="number_of_probes">Probes per objective (1–50)</label><input type="number" id="number_of_probes" value="3" min="1" max="50"></div>
       </div>
@@ -979,8 +984,9 @@ async def chat(request: Request):
             built-in ID; a name of 1–200 characters; <code>additional_context</code> up to 1500.</li>
           <li><b>Breaking:</b> <code>CustomObjective.category_id</code> is gone (it never had an effect), so the 7th
             positional argument is now <code>runs_with_direct_attacks</code>. Pass fields by keyword.</li>
-        </ul><p class="runner">In this runner: the objective limits and the built-in rule are checked before a scan starts,
-          and objectives are passed by keyword. Datasets, per-mode objectives and single-turn targets aren't in the form yet.</p></article>
+        </ul><p class="runner">In this runner: <b>Single-turn target</b> under Scan (model API targets always are). The
+          objective limits and the built-in rule are checked before a scan starts. Datasets and per-mode objectives
+          aren't in the form yet.</p></article>
         <article data-version="0.12.0"><h3>0.12.0 <small>2026-10-19</small></h3><ul>
           <li><b>Agent threat modeling:</b> <code>infer_topology</code> assesses the agent's weaknesses from its ground truth,
             and <code>generate_objectives</code> makes one objective per weakness. <code>get_topology</code> and
@@ -1138,10 +1144,14 @@ function refresh() {
   $("response_path").placeholder = preset ? `blank = ${MODEL_PATHS[fmt]}`
     : $("stream_url").value.trim() && !model ? "content — field inside each SSE event (blank = content)"
     : "e.g. choices.0.message.content — blank = whole body";
-  // A model target answers each attack on its own, so the multi-turn strategies are locked out.
-  ["crescendo", TRP].forEach(v => { $("strategy").querySelector(`option[value=${v}]`).disabled = model; });
-  if (model && ["crescendo", TRP].includes($("strategy").value)) $("strategy").value = "static";
-  $("strategy_note").hidden = !model;
+  // A single-turn target (every model target) answers each attack on its own, so the
+  // multi-turn strategies are locked out, as Red refuses them.
+  const single = model || $("single_turn").checked;
+  $("single_turn_box").hidden = model;
+  ["crescendo", TRP].forEach(v => { $("strategy").querySelector(`option[value=${v}]`).disabled = single; });
+  if (single && ["crescendo", TRP].includes($("strategy").value)) $("strategy").value = "static";
+  $("strategy_note").hidden = !single;
+  $("strategy_note_why").textContent = model ? "model API" : "single-turn";
   const strategy = $("strategy").value, trp = strategy === TRP;
   $("threat_model").disabled = strategy === "smoke";  // smoke ignores objectives
   $("refresh_tm_box").hidden = !$("threat_model").checked || strategy === "smoke";
@@ -1159,7 +1169,7 @@ function refresh() {
   $("ca_upload_box").hidden = ca !== "upload";
   updateSummaries();
 }
-["auth_type", "strategy", "target_kind", "api_format", "threat_model"].forEach(id => $(id).addEventListener("change", refresh));
+["auth_type", "strategy", "target_kind", "api_format", "threat_model", "single_turn"].forEach(id => $(id).addEventListener("change", refresh));
 ["url", "stream_url"].forEach(id => $(id).addEventListener("input", refresh));
 $("ca_mode").addEventListener("change", () => { refresh(); if ($("ca_mode").value === "upload") loadStoredCAs(); });
 
@@ -1191,7 +1201,8 @@ const SUMMARIES = {
     return [s, s === "static" ? `${$("number_of_probes").value} probe(s)` : s === "crescendo" ? `${$("max_turns").value} turns`
               : s === TRP ? `${$("attacks_per_objective").value} attack(s)` : "",
             s === TRP ? "custom objectives" : n ? `${n} objective(s)` : "all objectives",
-            $("threat_model").checked && s !== "smoke" ? "+ threat model" : "", $("language").value];
+            $("threat_model").checked && s !== "smoke" ? "+ threat model" : "",
+            !isModel() && $("single_turn").checked ? "single-turn" : "", $("language").value];
   },
 };
 function updateSummaries() {
@@ -1733,6 +1744,7 @@ $("form").onsubmit = async ev => {
       concurrency: +$("concurrency").value,
       language: $("language").value,
       response_timeout_seconds: $("response_timeout_seconds").value ? +$("response_timeout_seconds").value : null,
+      single_turn: isModel() || $("single_turn").checked,
       system_prompt_as_ground_truth: $("sp_ground_truth").checked,
       target: targetSpec(),
     };
@@ -1846,6 +1858,7 @@ const TRP_EXAMPLE = [{key: "example.trp.email-outside.1", name: "Example: email 
 $("dg-setup").onclick = async () => {
   const fields = {target_kind: "endpoint", strategy: TRP}, did = ["picked tool-response-poisoning"];
   if (isModel()) did.push("switched the target to a chat endpoint");
+  if (!isModel() && $("single_turn").checked) { fields.single_turn = false; did.push("turned off single-turn"); }
   if (!$("custom_objectives").value.trim()) {
     fields.custom_objectives = JSON.stringify(TRP_EXAMPLE, null, 2);
     did.push("added an example objective to rewrite for your agent's tools");
